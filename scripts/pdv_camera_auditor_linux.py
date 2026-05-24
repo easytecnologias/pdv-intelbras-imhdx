@@ -38,6 +38,7 @@ def parse_args():
     parser.add_argument("--suspect-min-score", type=float, default=float(os.environ.get("AUDITOR_SUSPECT_MIN_SCORE", "24.0")))
     parser.add_argument("--suspect-min-moves", type=int, default=int(os.environ.get("AUDITOR_SUSPECT_MIN_MOVES", "4")))
     parser.add_argument("--suspect-min-duration", type=float, default=float(os.environ.get("AUDITOR_SUSPECT_MIN_DURATION", "3.0")))
+    parser.add_argument("--skin-ignore-ratio", type=float, default=float(os.environ.get("AUDITOR_SKIN_IGNORE_RATIO", "0.12")))
     parser.add_argument("--consultation-window", type=float, default=float(os.environ.get("AUDITOR_CONSULTATION_WINDOW", "45.0")))
     parser.add_argument("--cluster-gap", type=float, default=float(os.environ.get("AUDITOR_CLUSTER_GAP", "3.0")))
     parser.add_argument("--max-cluster", type=float, default=float(os.environ.get("AUDITOR_MAX_CLUSTER", "7.0")))
@@ -132,8 +133,28 @@ def snapshot(args):
 
 def motion_image(jpeg, roi):
     image = Image.open(BytesIO(jpeg)).convert("RGB")
-    crop = image.crop(roi).convert("L").resize((46, 65))
-    return image, list(crop.getdata())
+    crop_rgb = image.crop(roi).resize((46, 65))
+    crop = crop_rgb.convert("L")
+    return image, list(crop.getdata()), skin_ratio(crop_rgb)
+
+
+def skin_ratio(image):
+    pixels = list(image.getdata())
+    if not pixels:
+        return 0.0
+    skin = 0
+    for r, g, b in pixels:
+        if (
+            r > 80
+            and g > 35
+            and b > 20
+            and r > g
+            and r > b
+            and abs(r - g) > 12
+            and max(r, g, b) - min(r, g, b) > 25
+        ):
+            skin += 1
+    return skin / float(len(pixels))
 
 
 def motion_score(previous, current):
@@ -243,7 +264,7 @@ def main():
 
         try:
             jpeg = snapshot(args)
-            image, current = motion_image(jpeg, roi)
+            image, current, skin = motion_image(jpeg, roi)
             score = motion_score(previous, current)
             if score > args.threshold and now >= ignore_until and (now - last_motion).total_seconds() > 1:
                 stamp = now.strftime("%Y%m%d_%H%M%S")
@@ -256,6 +277,7 @@ def main():
                 ):
                     open_cluster["last"] = now
                     open_cluster["score"] = max(open_cluster["score"], score)
+                    open_cluster["skin"] = max(open_cluster["skin"], skin)
                     open_cluster["count"] += 1
                     if score >= open_cluster["score"]:
                         open_cluster["image"] = image_path
@@ -266,10 +288,20 @@ def main():
                         "start": now,
                         "last": now,
                         "score": score,
+                        "skin": skin,
                         "count": 1,
                         "image": image_path,
                     }
-                print("MOVIMENTO", now.strftime("%H:%M:%S"), "score=", round(score, 2), image_path, flush=True)
+                print(
+                    "MOVIMENTO",
+                    now.strftime("%H:%M:%S"),
+                    "score=",
+                    round(score, 2),
+                    "skin=",
+                    round(skin, 3),
+                    image_path,
+                    flush=True,
+                )
                 last_motion = now
             previous = current
         except Exception as exc:
@@ -340,6 +372,11 @@ def main():
                 status = "ignorado"
                 reason = "movimento fraco/curto sem item"
                 print("IGNORADO", cluster["start"].strftime("%H:%M:%S"), reason, flush=True)
+            elif cluster.get("skin", 0.0) >= args.skin_ignore_ratio:
+                pending.popleft()
+                status = "ignorado"
+                reason = "movimento com mao/braco no scanner"
+                print("IGNORADO", cluster["start"].strftime("%H:%M:%S"), reason, flush=True)
             else:
                 pending.popleft()
                 status = "suspeita"
@@ -353,6 +390,7 @@ def main():
                 "pdv": args.pdv_station,
                 "tipo": status,
                 "score": round(cluster["score"], 2),
+                "skin": round(cluster.get("skin", 0.0), 3),
                 "movimentos": cluster["count"],
                 "motivo": reason,
                 "imagem": str(cluster["image"]),
