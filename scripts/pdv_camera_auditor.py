@@ -32,7 +32,7 @@ def parse_args():
     parser.add_argument("--post-item-ignore", type=float, default=8.0)
     parser.add_argument("--post-payment-ignore", type=float, default=12.0)
     parser.add_argument("--outdir", default="tmp/pdv1_auditor_live")
-    parser.add_argument("--roi", default="325,185,485,355")
+    parser.add_argument("--roi", default="382,172,474,302")
     parser.add_argument("--telegram-token", default=os.environ.get("TELEGRAM_BOT_TOKEN", ""))
     parser.add_argument("--telegram-chat-id", default=os.environ.get("TELEGRAM_CHAT_ID", ""))
     parser.add_argument("--telegram-send-types", default="suspeita")
