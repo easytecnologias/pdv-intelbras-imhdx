@@ -34,6 +34,10 @@ def parse_args():
     parser.add_argument("--item-after-window", type=float, default=float(os.environ.get("AUDITOR_ITEM_AFTER", "35.0")))
     parser.add_argument("--match-delay", type=float, default=float(os.environ.get("AUDITOR_MATCH_DELAY", "4.0")))
     parser.add_argument("--pending-suspect-delay", type=float, default=float(os.environ.get("AUDITOR_PENDING_DELAY", "30.0")))
+    parser.add_argument("--suspect-cooldown", type=float, default=float(os.environ.get("AUDITOR_SUSPECT_COOLDOWN", "90.0")))
+    parser.add_argument("--suspect-min-score", type=float, default=float(os.environ.get("AUDITOR_SUSPECT_MIN_SCORE", "24.0")))
+    parser.add_argument("--suspect-min-moves", type=int, default=int(os.environ.get("AUDITOR_SUSPECT_MIN_MOVES", "4")))
+    parser.add_argument("--suspect-min-duration", type=float, default=float(os.environ.get("AUDITOR_SUSPECT_MIN_DURATION", "3.0")))
     parser.add_argument("--consultation-window", type=float, default=float(os.environ.get("AUDITOR_CONSULTATION_WINDOW", "45.0")))
     parser.add_argument("--cluster-gap", type=float, default=float(os.environ.get("AUDITOR_CLUSTER_GAP", "3.0")))
     parser.add_argument("--max-cluster", type=float, default=float(os.environ.get("AUDITOR_MAX_CLUSTER", "7.0")))
@@ -206,6 +210,7 @@ def main():
     events = []
     seen = set()
     cupom_open = None
+    suspect_ignore_until = datetime.min
     start = datetime.now()
     last_spy = start - timedelta(seconds=20)
 
@@ -321,10 +326,25 @@ def main():
                 status = "ignorado"
                 reason = "movimento fora de cupom aberto"
                 print("IGNORADO", cluster["start"].strftime("%H:%M:%S"), reason, flush=True)
+            elif now < suspect_ignore_until:
+                pending.popleft()
+                status = "ignorado"
+                reason = "movimento dentro do cooldown de suspeita"
+                print("IGNORADO", cluster["start"].strftime("%H:%M:%S"), reason, flush=True)
+            elif (
+                cluster["score"] < args.suspect_min_score
+                or cluster["count"] < args.suspect_min_moves
+                or (cluster["last"] - cluster["start"]).total_seconds() < args.suspect_min_duration
+            ):
+                pending.popleft()
+                status = "ignorado"
+                reason = "movimento fraco/curto sem item"
+                print("IGNORADO", cluster["start"].strftime("%H:%M:%S"), reason, flush=True)
             else:
                 pending.popleft()
                 status = "suspeita"
                 reason = "movimento sem item registrado"
+                suspect_ignore_until = now + timedelta(seconds=args.suspect_cooldown)
                 print("SUSPEITA", cluster["start"].strftime("%H:%M:%S"), reason, cluster["image"], flush=True)
 
             payload = {
