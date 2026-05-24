@@ -1,0 +1,16 @@
+[Unit]
+Description=PDV Intelbras iMHDX POS bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/pdv-intelbras-bridge/pdv_intelbras_bridge.py --station 4 --src-port 52104 --dest-ip 192.168.24.174 --dest-port 52104 --spy-only --cm-fallback
+Restart=always
+RestartSec=2
+WorkingDirectory=/home/rpdv/frente
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

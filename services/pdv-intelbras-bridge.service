@@ -1,0 +1,17 @@
+[Unit]
+Description=PDV Intelbras iMHDX POS bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/pdv-intelbras-bridge.env
+ExecStart=/usr/bin/python3 /opt/pdv-intelbras-bridge/pdv_intelbras_bridge.py --station ${PDV_STATION} --src-port ${PDV_SRC_PORT} --dest-ip ${IMHDX_IP} --dest-port ${IMHDX_PORT}
+Restart=always
+RestartSec=2
+WorkingDirectory=/home/rpdv/frente
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

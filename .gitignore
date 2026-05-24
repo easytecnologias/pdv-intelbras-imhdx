@@ -1,0 +1,11 @@
+*.log
+*.pcap
+*.zip
+*.bak
+*.bak_*
+__pycache__/
+*.pyc
+secrets.*
+*.key
+*.pem
+.env
