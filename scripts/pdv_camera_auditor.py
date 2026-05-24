@@ -14,6 +14,7 @@ from requests.auth import HTTPDigestAuth
 
 
 ITEM_RE = re.compile(r"\[(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\] enviado: (?P<text>.+)$")
+SPY_RE = re.compile(r"^(?P<time>\d{2}:\d{2}:\d{2}):(?P<text>.+)$")
 
 
 def parse_args():
@@ -25,8 +26,14 @@ def parse_args():
     parser.add_argument("--pdv-user", default="root")
     parser.add_argument("--pdv-pass", required=True)
     parser.add_argument("--pdv-hostkey", required=True)
+    parser.add_argument("--pdv-station", default="001")
+    parser.add_argument("--pdv-base-dir", default="/home/rpdv/frente")
+    parser.add_argument("--spy-tail", type=int, default=350)
     parser.add_argument("--duration", type=int, default=180)
     parser.add_argument("--window", type=float, default=5.0)
+    parser.add_argument("--item-after-window", type=float, default=35.0)
+    parser.add_argument("--pending-suspect-delay", type=float, default=30.0)
+    parser.add_argument("--consultation-window", type=float, default=45.0)
     parser.add_argument("--cluster-gap", type=float, default=3.0)
     parser.add_argument("--max-cluster", type=float, default=7.0)
     parser.add_argument("--post-item-ignore", type=float, default=8.0)
@@ -64,6 +71,42 @@ def get_journal_events(args, since):
             continue
         ts = datetime.strptime(match.group("ts"), "%Y-%m-%d %H:%M:%S")
         events.append((ts, match.group("text")))
+    return events
+
+
+def run_plink(args, remote):
+    cmd = [
+        "plink",
+        "-batch",
+        "-ssh",
+        f"{args.pdv_user}@{args.pdv_host}",
+        "-hostkey",
+        args.pdv_hostkey,
+        "-pw",
+        args.pdv_pass,
+        remote,
+    ]
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+
+
+def get_spy_events(args):
+    today = datetime.now()
+    filename = f"Espiao{today.strftime('%d%m%y')}.{args.pdv_station}"
+    path = f"{args.pdv_base_dir}/Cm/{filename}"
+    remote = f"test -r {path} && tail -n {args.spy_tail} {path}"
+    proc = run_plink(args, remote)
+    events = []
+    for line in proc.stdout.splitlines():
+        match = SPY_RE.match(line.strip())
+        if not match:
+            continue
+        raw_text = match.group("text").strip()
+        kind = spy_event_kind(raw_text)
+        if not kind:
+            continue
+        event_time = datetime.strptime(match.group("time"), "%H:%M:%S").time()
+        ts = datetime.combine(today.date(), event_time)
+        events.append((ts, normalize_spy_text(kind, raw_text)))
     return events
 
 
@@ -114,9 +157,9 @@ def item_near(items, target, seconds):
     return near
 
 
-def item_near_cluster(items, start, end, seconds):
-    before = start - timedelta(seconds=seconds)
-    after = end + timedelta(seconds=seconds)
+def item_near_cluster(items, start, end, before_seconds, after_seconds):
+    before = start - timedelta(seconds=before_seconds)
+    after = end + timedelta(seconds=after_seconds)
     return [(ts, text) for ts, text in items if before <= ts <= after and event_kind(text) == "item"]
 
 
@@ -126,7 +169,62 @@ def payment_near_cluster(items, start, end, seconds):
     return [(ts, text) for ts, text in items if before <= ts <= after and event_kind(text) == "payment"]
 
 
+def consultation_near_cluster(items, start, end, seconds):
+    before = start - timedelta(seconds=seconds)
+    after = end + timedelta(seconds=seconds)
+    return [(ts, text) for ts, text in items if before <= ts <= after and event_kind(text) == "consultation"]
+
+
+def sale_activity_near(items, start, end, seconds):
+    before = start - timedelta(seconds=seconds)
+    after = end + timedelta(seconds=seconds)
+    return [(ts, text) for ts, text in items if before <= ts <= after and event_kind(text) in {"start", "item", "consultation", "payment"}]
+
+
+def spy_event_kind(text):
+    if text.startswith("CSP |"):
+        return "consultation"
+    if text.startswith("VIT |"):
+        return "item"
+    if text.startswith("ABRECUPOM |"):
+        return "start"
+    if text.startswith("FECHACUPOM |") or text.startswith("FIN |"):
+        return "payment"
+    return ""
+
+
+def field_value(text, name):
+    match = re.search(rf"\b{name}:\s*([^|]+)", text)
+    return match.group(1).strip() if match else ""
+
+
+def normalize_spy_text(kind, text):
+    if kind == "consultation":
+        code = field_value(text, "Cod")
+        desc = field_value(text, "Descricao")
+        value = field_value(text, "VlUnit")
+        parts = ["CONSULTA"]
+        if code:
+            parts.append(code)
+        if desc:
+            parts.append(desc)
+        if value:
+            parts.append(f"R$ {value}")
+        return " | ".join(parts)
+    if kind == "start":
+        return "ABRECUPOM"
+    if kind == "payment":
+        return "FECHACUPOM"
+    return text
+
+
 def event_kind(text):
+    if text.startswith("CONSULTA"):
+        return "consultation"
+    if text == "ABRECUPOM":
+        return "start"
+    if text == "FECHACUPOM":
+        return "payment"
     if "| FIM" in text or " | FIM" in text:
         return "payment"
     if "| INICIO" in text or " | INICIO " in text:
@@ -149,8 +247,10 @@ def main():
     pending = deque()
     items = []
     seen_items = set()
+    cupom_open = None
     start = datetime.now()
     last_journal = start - timedelta(seconds=20)
+    last_spy = start - timedelta(seconds=20)
 
     print("AUDITOR_INICIO", start.strftime("%Y-%m-%d %H:%M:%S"))
     print("ROI", (x1, y1, x2, y2))
@@ -167,10 +267,34 @@ def main():
                         continue
                     seen_items.add(key)
                     items.append(key)
+                    if event_kind(text) in {"start", "item"}:
+                        cupom_open = True
+                    elif event_kind(text) == "payment":
+                        cupom_open = False
                     print("ITEM", ts.strftime("%H:%M:%S"), text)
                 last_journal = now
             except Exception as exc:
                 print("JOURNAL_ERRO", type(exc).__name__, exc)
+
+        if (now - last_spy).total_seconds() >= 2:
+            try:
+                for ts, text in get_spy_events(args):
+                    if ts < last_spy - timedelta(seconds=2):
+                        continue
+                    key = (ts, text)
+                    if key in seen_items:
+                        continue
+                    seen_items.add(key)
+                    items.append(key)
+                    kind = event_kind(text)
+                    if kind in {"start", "item", "consultation"}:
+                        cupom_open = True
+                    elif kind == "payment":
+                        cupom_open = False
+                    print(kind.upper(), ts.strftime("%H:%M:%S"), text)
+                last_spy = now
+            except Exception as exc:
+                print("ESPIAO_ERRO", type(exc).__name__, exc)
 
         try:
             frame = snapshot(args)
@@ -216,13 +340,26 @@ def main():
             pending.append(open_cluster)
             open_cluster = None
 
-        while pending and (now - pending[0]["last"]).total_seconds() >= args.window:
+        while pending and (now - pending[0]["last"]).total_seconds() >= args.pending_suspect_delay:
             cluster = pending.popleft()
             motion_ts = cluster["start"]
             score = cluster["score"]
             image_path = cluster["image"]
             paid = payment_near_cluster(items, cluster["start"], cluster["last"], args.window)
-            near = item_near_cluster(items, cluster["start"], cluster["last"], args.window)
+            near = item_near_cluster(
+                items,
+                cluster["start"],
+                cluster["last"],
+                args.window,
+                args.item_after_window,
+            )
+            consult = consultation_near_cluster(
+                items,
+                cluster["start"],
+                cluster["last"],
+                args.consultation_window,
+            )
+            activity = sale_activity_near(items, cluster["start"], cluster["last"], args.consultation_window)
             if near:
                 status = "casou"
                 reason = near[-1][1].replace('"', "'")
@@ -233,9 +370,21 @@ def main():
                 reason = "movimento durante pagamento/finalizacao"
                 ignore_until = now + timedelta(seconds=args.post_payment_ignore)
                 print("IGNORADO", motion_ts.strftime("%H:%M:%S"), reason)
+            elif consult and (now - consult[-1][0]).total_seconds() < args.consultation_window:
+                pending.append(cluster)
+                print("AGUARDANDO_CONSULTA", motion_ts.strftime("%H:%M:%S"), consult[-1][1])
+                break
+            elif consult:
+                status = "consulta"
+                reason = f"movimento durante consulta sem venda no prazo: {consult[-1][1]}".replace('"', "'")
+                print("CONSULTA_SEM_VENDA", motion_ts.strftime("%H:%M:%S"), reason)
             elif motion_ts < ignore_until:
                 status = "ignorado"
                 reason = "movimento apos item casado"
+                print("IGNORADO", motion_ts.strftime("%H:%M:%S"), reason)
+            elif cupom_open is False and not activity:
+                status = "ignorado"
+                reason = "movimento fora de cupom aberto"
                 print("IGNORADO", motion_ts.strftime("%H:%M:%S"), reason)
             else:
                 status = "suspeita"

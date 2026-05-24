@@ -24,6 +24,27 @@ systemctl is-active pdv-intelbras-bridge.service
 /home/rpdv/frente/Log/logAAAAMMDD.NNN
 ```
 
+## Auditoria de camera no PDV1
+
+O prototipo de auditoria compara movimento na area do scanner com eventos reais
+do PDV. Para evitar falso positivo quando o operador demora com o produto parado
+porque esta consultando o sistema, o auditor tambem le eventos `CSP` no Espiao.
+
+```text
+CSP = consulta de produto/preco
+VIT = item registrado na venda
+FIN = pagamento
+```
+
+Regra pratica:
+
+```text
+movimento + VIT dentro da janela       -> casou
+movimento + CSP recente                -> aguarda consulta
+movimento + pagamento/fim              -> ignora
+movimento sem VIT depois da espera     -> suspeita
+```
+
 ## Causa corrigida em 2026-05-24
 
 A ponte ficava presa no arquivo do dia anterior quando o arquivo antigo continuava existindo.
