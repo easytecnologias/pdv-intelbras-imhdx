@@ -32,6 +32,7 @@ def parse_args():
     parser.add_argument("--window", type=float, default=float(os.environ.get("AUDITOR_WINDOW", "5.0")))
     parser.add_argument("--item-before-window", type=float, default=float(os.environ.get("AUDITOR_ITEM_BEFORE", "20.0")))
     parser.add_argument("--item-after-window", type=float, default=float(os.environ.get("AUDITOR_ITEM_AFTER", "35.0")))
+    parser.add_argument("--match-delay", type=float, default=float(os.environ.get("AUDITOR_MATCH_DELAY", "4.0")))
     parser.add_argument("--pending-suspect-delay", type=float, default=float(os.environ.get("AUDITOR_PENDING_DELAY", "30.0")))
     parser.add_argument("--consultation-window", type=float, default=float(os.environ.get("AUDITOR_CONSULTATION_WINDOW", "45.0")))
     parser.add_argument("--cluster-gap", type=float, default=float(os.environ.get("AUDITOR_CLUSTER_GAP", "3.0")))
@@ -273,8 +274,11 @@ def main():
             pending.append(open_cluster)
             open_cluster = None
 
-        while pending and (now - pending[0]["last"]).total_seconds() >= args.pending_suspect_delay:
-            cluster = pending.popleft()
+        while pending:
+            cluster = pending[0]
+            cluster_age = (now - cluster["last"]).total_seconds()
+            if cluster_age < args.match_delay:
+                break
             paid = typed_near(events, cluster["start"], cluster["last"], args.window, "payment")
             near = items_near(
                 events,
@@ -286,32 +290,39 @@ def main():
             consult = typed_near(events, cluster["start"], cluster["last"], args.consultation_window, "consultation")
             activity = activity_near(events, cluster["start"], cluster["last"], args.consultation_window)
             if near:
+                pending.popleft()
                 status = "casou"
                 reason = near[-1][1].replace('"', "'")
                 ignore_until = now + timedelta(seconds=args.post_item_ignore)
                 print("CASOU", cluster["start"].strftime("%H:%M:%S"), "item=", reason, flush=True)
             elif paid:
+                pending.popleft()
                 status = "ignorado"
                 reason = "movimento durante pagamento/finalizacao"
                 ignore_until = now + timedelta(seconds=args.post_payment_ignore)
                 print("IGNORADO", cluster["start"].strftime("%H:%M:%S"), reason, flush=True)
             elif consult and (now - consult[-1][0]).total_seconds() < args.consultation_window:
-                pending.append(cluster)
                 print("AGUARDANDO_CONSULTA", cluster["start"].strftime("%H:%M:%S"), consult[-1][1], flush=True)
                 break
+            elif cluster_age < args.pending_suspect_delay:
+                break
             elif consult:
+                pending.popleft()
                 status = "consulta"
                 reason = "movimento durante consulta sem venda no prazo: %s" % consult[-1][1]
                 print("CONSULTA_SEM_VENDA", cluster["start"].strftime("%H:%M:%S"), reason, flush=True)
             elif cluster["start"] < ignore_until:
+                pending.popleft()
                 status = "ignorado"
                 reason = "movimento apos item casado"
                 print("IGNORADO", cluster["start"].strftime("%H:%M:%S"), reason, flush=True)
             elif cupom_open is False and not activity:
+                pending.popleft()
                 status = "ignorado"
                 reason = "movimento fora de cupom aberto"
                 print("IGNORADO", cluster["start"].strftime("%H:%M:%S"), reason, flush=True)
             else:
+                pending.popleft()
                 status = "suspeita"
                 reason = "movimento sem item registrado"
                 print("SUSPEITA", cluster["start"].strftime("%H:%M:%S"), reason, cluster["image"], flush=True)
