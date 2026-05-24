@@ -120,7 +120,6 @@ class PosBridge:
         self.last_cm_item = None
         self.last_cm_command_item = None
         self.pending_cm_items = {}
-        self.recent_cm_commands = {}
         self.current_coupon = None
         self.lock = threading.Lock()
 
@@ -244,16 +243,10 @@ class PosBridge:
         coupon, code, _unit, qty, total = match.groups()
         qty = normalize_decimal(qty)
         total = normalize_money(total)
+        # Cada COMANDO ==> REGISTRA ITEM representa uma passada real no caixa.
+        # Nao deduplicar por codigo/valor aqui, porque dois itens iguais em
+        # sequencia precisam aparecer duas vezes no video do PDV.
         dedupe = (coupon, code, qty, total)
-        now = time.time()
-        if now - self.recent_cm_commands.get(dedupe, 0) < 8:
-            return True
-        self.recent_cm_commands[dedupe] = now
-
-        for old_key, old_time in list(self.recent_cm_commands.items()):
-            if now - old_time > 120:
-                self.recent_cm_commands.pop(old_key, None)
-
         self.last_cm_command_item = dedupe
         self.current_coupon = coupon
         item = self.pending_cm_items.pop(dedupe, None)

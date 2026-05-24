@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 /opt/pdv-intelbras-bridge/pdv_intelbras_bridge.py --station 1 --src-port 52101 --dest-ip 192.168.24.227 --dest-port 38801 --spy-only
+ExecStart=/usr/bin/python3 /opt/pdv-intelbras-bridge/pdv_intelbras_bridge.py --station 1 --src-port 52101 --dest-ip 192.168.24.227 --dest-port 38801
 Restart=always
 RestartSec=2
 WorkingDirectory=/home/rpdv/frente
