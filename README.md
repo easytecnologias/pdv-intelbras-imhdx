@@ -7,6 +7,7 @@ Pacote de integracao entre WRPDV/Sierra e gravador Intelbras iMHDX.
 - `docs/MANUAL_PDV_INTELBRAS_IMHDX.md`: manual operacional completo.
 - `scripts/pdv_intelbras_bridge.py`: servico Python instalado nos PDVs Linux.
 - `scripts/pdv_camera_auditor.py`: prototipo de auditoria por camera para cruzar movimento na area do scanner com eventos do PDV.
+- `scripts/pdv_camera_auditor_linux.py`: auditor local para rodar direto no PDV Linux, sem depender do Windows.
 - `scripts/install_bridge_pdv.sh`: instalador generico da ponte no PDV.
 - `services/*.service`: unidades systemd usadas nos PDVs.
 
@@ -44,9 +45,9 @@ Antes de publicar no GitHub, revise qualquer arquivo novo adicionado fora desta 
 
 ## Auditoria por camera
 
-O auditor do PDV1 usa a imagem da camera somente como indicio. Ele cruza o
-movimento na area do scanner com o arquivo `EspiaoDDMMAA.001` e com o journal da
-ponte.
+O auditor do PDV1 deve rodar no proprio Linux do PDV como servico
+`pdv-camera-auditor.service`. Ele usa a imagem da camera somente como indicio e
+cruza o movimento na area do scanner com o arquivo local `EspiaoDDMMAA.001`.
 
 Eventos relevantes do Espiao:
 

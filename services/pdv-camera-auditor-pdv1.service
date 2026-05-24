@@ -1,0 +1,16 @@
+[Unit]
+Description=PDV1 Camera Auditor
+After=network-online.target pdv-intelbras-bridge.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/pdv-camera-auditor.env
+ExecStart=/usr/bin/python3 /opt/pdv-camera-auditor/pdv_camera_auditor_linux.py
+Restart=always
+RestartSec=5
+User=root
+WorkingDirectory=/opt/pdv-camera-auditor
+
+[Install]
+WantedBy=multi-user.target

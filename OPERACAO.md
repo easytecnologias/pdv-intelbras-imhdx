@@ -27,8 +27,10 @@ systemctl is-active pdv-intelbras-bridge.service
 ## Auditoria de camera no PDV1
 
 O prototipo de auditoria compara movimento na area do scanner com eventos reais
-do PDV. Para evitar falso positivo quando o operador demora com o produto parado
-porque esta consultando o sistema, o auditor tambem le eventos `CSP` no Espiao.
+do PDV. Em producao/teste correto, ele roda dentro do proprio PDV1 Linux pelo
+servico `pdv-camera-auditor.service`, lendo o Espiao local e a camera pela rede.
+Para evitar falso positivo quando o operador demora com o produto parado porque
+esta consultando o sistema, o auditor tambem le eventos `CSP` no Espiao.
 
 ```text
 CSP = consulta de produto/preco
@@ -43,6 +45,15 @@ movimento + VIT dentro da janela       -> casou
 movimento + CSP recente                -> aguarda consulta
 movimento + pagamento/fim              -> ignora
 movimento sem VIT depois da espera     -> suspeita
+```
+
+Comandos no PDV1:
+
+```sh
+systemctl status pdv-camera-auditor.service
+journalctl -u pdv-camera-auditor.service -n 80 --no-pager
+tail -n 20 /var/log/pdv-camera-auditor/events.jsonl
+find /var/log/pdv-camera-auditor/evidencias -type f | tail
 ```
 
 ## Causa corrigida em 2026-05-24
