@@ -1,4 +1,5 @@
 import argparse
+import os
 import re
 import subprocess
 import time
@@ -32,6 +33,9 @@ def parse_args():
     parser.add_argument("--post-payment-ignore", type=float, default=12.0)
     parser.add_argument("--outdir", default="tmp/pdv1_auditor_live")
     parser.add_argument("--roi", default="325,185,485,355")
+    parser.add_argument("--telegram-token", default=os.environ.get("TELEGRAM_BOT_TOKEN", ""))
+    parser.add_argument("--telegram-chat-id", default=os.environ.get("TELEGRAM_CHAT_ID", ""))
+    parser.add_argument("--telegram-send-types", default="suspeita")
     return parser.parse_args()
 
 
@@ -77,6 +81,30 @@ def snapshot(args):
     if frame is None:
         raise RuntimeError("snapshot nao decodificou")
     return frame
+
+
+def telegram_enabled(args):
+    return bool(args.telegram_token and args.telegram_chat_id)
+
+
+def send_telegram_photo(args, image_path, caption):
+    if not telegram_enabled(args):
+        return
+    url = f"https://api.telegram.org/bot{args.telegram_token}/sendPhoto"
+    with open(image_path, "rb") as photo:
+        response = requests.post(
+            url,
+            data={"chat_id": args.telegram_chat_id, "caption": caption[:1024]},
+            files={"photo": photo},
+            timeout=15,
+        )
+    if response.status_code != 200:
+        raise RuntimeError(f"telegram HTTP {response.status_code}: {response.text[:200]}")
+
+
+def should_send_telegram(args, status):
+    allowed = {item.strip().lower() for item in args.telegram_send_types.split(",") if item.strip()}
+    return status.lower() in allowed or "todos" in allowed or "all" in allowed
 
 
 def item_near(items, target, seconds):
@@ -227,6 +255,27 @@ def main():
             )
             with events_file.open("a", encoding="utf-8") as fh:
                 fh.write(line)
+            if should_send_telegram(args, status):
+                caption = (
+                    "PDV 001 - {tipo}\n"
+                    "Hora: {hora}\n"
+                    "Fim: {fim}\n"
+                    "Motivo: {motivo}\n"
+                    "Score: {score:.4f}\n"
+                    "Movimentos: {movimentos}"
+                ).format(
+                    tipo=status.upper(),
+                    hora=motion_ts.strftime("%Y-%m-%d %H:%M:%S"),
+                    fim=cluster["last"].strftime("%Y-%m-%d %H:%M:%S"),
+                    motivo=reason,
+                    score=score,
+                    movimentos=cluster["count"],
+                )
+                try:
+                    send_telegram_photo(args, image_path, caption)
+                    print("TELEGRAM_ENVIADO", status, image_path)
+                except Exception as exc:
+                    print("TELEGRAM_ERRO", type(exc).__name__, exc)
 
         cutoff = now - timedelta(minutes=5)
         items = [(ts, text) for ts, text in items if ts >= cutoff]
