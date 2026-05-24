@@ -31,6 +31,7 @@ def parse_args():
     parser.add_argument("--spy-tail", type=int, default=350)
     parser.add_argument("--duration", type=int, default=180)
     parser.add_argument("--window", type=float, default=5.0)
+    parser.add_argument("--item-before-window", type=float, default=20.0)
     parser.add_argument("--item-after-window", type=float, default=35.0)
     parser.add_argument("--pending-suspect-delay", type=float, default=30.0)
     parser.add_argument("--consultation-window", type=float, default=45.0)
@@ -350,7 +351,7 @@ def main():
                 items,
                 cluster["start"],
                 cluster["last"],
-                args.window,
+                args.item_before_window,
                 args.item_after_window,
             )
             consult = consultation_near_cluster(
