@@ -6,14 +6,13 @@ Pacote de integracao entre WRPDV/Sierra e gravador Intelbras iMHDX.
 
 - `docs/MANUAL_PDV_INTELBRAS_IMHDX.md`: manual operacional completo.
 - `scripts/pdv_intelbras_bridge.py`: servico Python instalado nos PDVs Linux.
-- `scripts/pdv-intelbras-relay.ps1`: relay UDP do servidor Windows.
 - `scripts/install_bridge_pdv.sh`: instalador generico da ponte no PDV.
 - `services/*.service`: unidades systemd usadas nos PDVs.
 
 ## Fluxo
 
 ```text
-PDV Linux -> Servidor Windows 192.168.24.174 -> iMHDX 192.168.24.227:38801
+PDV Linux -> iMHDX 192.168.24.227:38801
 ```
 
 Cada PDV usa porta UDP propria:
@@ -30,6 +29,12 @@ PDV1=52101, PDV2=52102, ..., PDV12=52112
 - `pdv_intelbras_bridge.py` atualizado nos 12 PDVs com correcao para trocar automaticamente de arquivo na virada de dia.
 - Backup criado em cada PDV:
   ` /opt/pdv-intelbras-bridge/pdv_intelbras_bridge.py.bak_20260524_1043`
+
+## Modo de producao
+
+O sistema funciona em envio direto. Cada PDV envia UDP para o iMHDX usando sua
+propria porta de origem (`52100 + numero do PDV`). No iMHDX, cada entrada POS
+deve estar configurada com o IP real do PDV e a porta UDP correspondente.
 
 ## Observacao de seguranca
 

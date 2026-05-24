@@ -3,8 +3,8 @@ set -eu
 
 station="$1"
 src_port="$2"
-dest_ip="${3:-192.168.24.174}"
-dest_port="${4:-$src_port}"
+dest_ip="${3:-192.168.24.227}"
+dest_port="${4:-38801}"
 
 mkdir -p /opt/pdv-intelbras-bridge
 install -m 755 /tmp/pdv_intelbras_bridge.py /opt/pdv-intelbras-bridge/pdv_intelbras_bridge.py

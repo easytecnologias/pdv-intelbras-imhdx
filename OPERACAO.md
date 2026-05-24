@@ -32,6 +32,22 @@ Exemplo: seguia lendo `Espiao220526.001` mesmo depois da criacao de `Espiao24052
 A versao corrigida reavalia o caminho esperado enquanto aguarda novas linhas e reabre o
 arquivo novo quando ele aparece.
 
+## Fluxo de rede
+
+```text
+PDV -> iMHDX 192.168.24.227:38801
+```
+
+Nao ha equipamento intermediario no fluxo. Cada PDV deve sair com sua porta UDP
+propria:
+
+```text
+PDV001: origem 52101 -> destino 192.168.24.227:38801
+PDV002: origem 52102 -> destino 192.168.24.227:38801
+...
+PDV012: origem 52112 -> destino 192.168.24.227:38801
+```
+
 ## PDVs
 
 ```text
