@@ -81,6 +81,7 @@ Comandos principais:
 /cupom 216530
 /buscar bombom
 /foto 216657 arroz
+arroz 216657
 /suspeitas
 /ajuda
 ```

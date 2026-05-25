@@ -86,6 +86,7 @@ Exemplos:
 /buscar bombom
 /cupom 216657
 /foto 216657 bombom
+bombom 216657
 produto bombom do cupom 216657
 ```
 

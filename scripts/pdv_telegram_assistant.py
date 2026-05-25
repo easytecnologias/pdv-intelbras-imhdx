@@ -413,15 +413,28 @@ def product_photo(args, cupom, term):
     return {"photo": event["imagem"], "caption": caption}
 
 
+def split_cupom_product(text):
+    clean = " ".join(text.strip().split())
+    match = re.match(r"^(\d{4,})\s+(.+)$", clean)
+    if match:
+        return match.group(1), match.group(2).strip()
+    match = re.match(r"^(.+?)\s+(\d{4,})$", clean)
+    if match:
+        return match.group(2), match.group(1).strip()
+    return None
+
+
 def parse_product_photo_request(text):
     clean = " ".join(text.strip().split())
+    if clean.startswith("/"):
+        return None
     match = re.match(r"(?i)^produto\s+(.+?)\s+(?:do\s+)?cupom\s+(\d+)$", clean)
     if match:
         return match.group(2), match.group(1).strip()
     match = re.match(r"(?i)^foto\s+produto\s+(.+?)\s+(?:do\s+)?cupom\s+(\d+)$", clean)
     if match:
         return match.group(2), match.group(1).strip()
-    return None
+    return split_cupom_product(clean)
 
 
 def suspect_summary(args):
@@ -492,6 +505,7 @@ def help_text():
         "/buscar bombom",
         "/produto arroz",
         "/foto 216657 arroz",
+        "arroz 216657",
         "produto arroz do cupom 216657",
     ])
 
@@ -526,10 +540,10 @@ def handle_command(args, text):
     if cmd in ("/buscar", "/produto"):
         return search_items(args, rest) if rest else "Digite assim: /buscar bombom\nOu toque em Buscar produto e depois envie o nome."
     if cmd in ("/foto", "/imagem", "/print"):
-        photo_parts = rest.split(maxsplit=1)
-        if len(photo_parts) < 2:
-            return "Use: /foto 216657 arroz\nOu: produto arroz do cupom 216657"
-        return product_photo(args, photo_parts[0], photo_parts[1])
+        parsed = split_cupom_product(rest)
+        if not parsed:
+            return "Use: /foto 216657 arroz\nOu: arroz 216657"
+        return product_photo(args, parsed[0], parsed[1])
     if cmd == "/suspeitas":
         return suspect_summary(args)
     return "Comando nao reconhecido.\n\n%s" % help_text()
@@ -655,11 +669,11 @@ def main():
                         elif mode == "cupom":
                             answer = cupom_detail(args, text.strip())
                         elif mode == "photo":
-                            photo_parts = text.strip().split(maxsplit=1)
-                            if len(photo_parts) < 2:
-                                answer = "Envie assim: 216657 arroz."
+                            parsed = split_cupom_product(text)
+                            if not parsed:
+                                answer = "Envie assim: arroz 216657."
                             else:
-                                answer = product_photo(args, photo_parts[0], photo_parts[1])
+                                answer = product_photo(args, parsed[0], parsed[1])
                         else:
                             answer = handle_command(args, text)
                     else:
