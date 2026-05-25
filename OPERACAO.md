@@ -94,9 +94,9 @@ O botao `Data` define a data ativa da consulta. Depois disso, `Caixa`,
 `Dinheiro`, `Cupom`, `Buscar produto` e `Suspeitas` usam essa data ate que outra
 data seja selecionada.
 
-No comando de foto, o assistente tenta primeiro baixar a gravacao do iMHDX no
-horario do item e extrair um quadro. Se o iMHDX nao responder ou nao gerar
-imagem, ele usa a foto local salva pelo auditor como fallback.
+No comando de foto, o assistente tenta primeiro baixar a gravacao do canal do
+PDV no iMHDX, no horario do item, e extrair um quadro. Se o iMHDX nao responder
+ou nao gerar imagem, ele usa a foto local salva pelo auditor como fallback.
 
 ## Causa corrigida em 2026-05-24
 

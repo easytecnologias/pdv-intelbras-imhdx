@@ -439,7 +439,11 @@ def imhdx_photo_for_item(args, item):
             check=False,
         )
         if result.returncode == 0 and jpg_path.exists() and jpg_path.stat().st_size > 1024:
-            return {"imagem": str(jpg_path), "hora": item_dt.strftime("%Y-%m-%d %H:%M:%S"), "fonte": "iMHDX"}
+            return {
+                "imagem": str(jpg_path),
+                "hora": item_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                "fonte": "Gravacao PDV%s / iMHDX" % int(args.pdv_station),
+            }
     except Exception:
         return None
     return None

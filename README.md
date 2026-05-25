@@ -89,5 +89,5 @@ arroz 216657
 Pelos botoes do Telegram tambem e possivel escolher a data ativa, informar o
 numero do cupom, pesquisar produto sem digitar o comando completo e pedir uma
 foto do produto no cupom. Para foto, o bot tenta primeiro extrair o quadro da
-gravacao do iMHDX no horario do item; se nao conseguir, usa a evidencia local
-do auditor como fallback.
+gravacao do canal do PDV no iMHDX, exatamente no horario do item; se nao
+conseguir, usa a evidencia local do auditor como fallback.
