@@ -3,12 +3,15 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import time
 from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
+from urllib.parse import quote
 
 import requests
+from requests.auth import HTTPDigestAuth
 
 
 LINE_RE = re.compile(r"^(?P<time>\d{2}:\d{2}:\d{2}):(?P<event>[A-Z]+)\s*\|\s*(?P<body>.*)$")
@@ -23,6 +26,13 @@ def parse_args():
     parser.add_argument("--pdv-base-dir", default=os.environ.get("PDV_BASE_DIR", "/home/rpdv/frente"))
     parser.add_argument("--events-file", default=os.environ.get("AUDITOR_EVENTS_FILE", "/var/log/pdv-camera-auditor/events.jsonl"))
     parser.add_argument("--state-dir", default=os.environ.get("BOT_STATE_DIR", "/var/lib/pdv-telegram-assistant"))
+    parser.add_argument("--imhdx-host", default=os.environ.get("IMHDX_HOST", ""))
+    parser.add_argument("--imhdx-user", default=os.environ.get("IMHDX_USER", ""))
+    parser.add_argument("--imhdx-pass", default=os.environ.get("IMHDX_PASS", ""))
+    parser.add_argument("--imhdx-channel", type=int, default=int(os.environ.get("IMHDX_CHANNEL", "1")))
+    parser.add_argument("--imhdx-window-before", type=int, default=int(os.environ.get("IMHDX_WINDOW_BEFORE", "2")))
+    parser.add_argument("--imhdx-window-after", type=int, default=int(os.environ.get("IMHDX_WINDOW_AFTER", "8")))
+    parser.add_argument("--ffmpegthumbnailer", default=os.environ.get("FFMPEGTHUMBNAILER", "ffmpegthumbnailer"))
     parser.add_argument("--poll-timeout", type=int, default=25)
     args = parser.parse_args()
     if not args.token or not args.chat_id:
@@ -377,6 +387,64 @@ def find_photo_for_item(args, item, seconds=60):
     return best
 
 
+def imhdx_photo_for_item(args, item):
+    if not args.imhdx_host or not args.imhdx_user or not args.imhdx_pass:
+        return None
+
+    item_dt = item_datetime(args, item)
+    start = item_dt - timedelta(seconds=args.imhdx_window_before)
+    end = item_dt + timedelta(seconds=args.imhdx_window_after)
+    start_text = quote(start.strftime("%Y-%m-%d %H:%M:%S"))
+    end_text = quote(end.strftime("%Y-%m-%d %H:%M:%S"))
+    url = (
+        "http://%s/cgi-bin/loadfile.cgi?action=startLoad&channel=%s&startTime=%s&endTime=%s"
+        % (args.imhdx_host, args.imhdx_channel, start_text, end_text)
+    )
+
+    out_dir = Path(args.state_dir) / "imhdx"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stamp = item_dt.strftime("%Y%m%d_%H%M%S")
+    base = "%s_%s" % (stamp, re.sub(r"[^0-9A-Za-z_-]+", "_", item.get("code") or "item"))
+    dav_path = out_dir / ("%s.dav" % base)
+    jpg_path = out_dir / ("%s.jpg" % base)
+
+    try:
+        response = requests.get(
+            url,
+            auth=HTTPDigestAuth(args.imhdx_user, args.imhdx_pass),
+            timeout=25,
+        )
+        if response.status_code != 200 or len(response.content) < 1024:
+            return None
+        if not response.content.startswith(b"DHAV"):
+            return None
+        dav_path.write_bytes(response.content)
+        result = subprocess.run(
+            [
+                args.ffmpegthumbnailer,
+                "-i",
+                str(dav_path),
+                "-o",
+                str(jpg_path),
+                "-s",
+                "0",
+                "-t",
+                "00:00:%02d" % max(1, args.imhdx_window_before),
+                "-q",
+                "8",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=30,
+            check=False,
+        )
+        if result.returncode == 0 and jpg_path.exists() and jpg_path.stat().st_size > 1024:
+            return {"imagem": str(jpg_path), "hora": item_dt.strftime("%Y-%m-%d %H:%M:%S"), "fonte": "iMHDX"}
+    except Exception:
+        return None
+    return None
+
+
 def product_photo(args, cupom, term):
     _, by_number, _ = read_sales(args)
     cup = by_number.get(str(cupom).strip())
@@ -390,16 +458,18 @@ def product_photo(args, cupom, term):
     if not matches:
         return {"text": "Nao achei '%s' no cupom %s." % (term, cupom)}
     item = matches[0]
-    event = find_photo_for_item(args, item)
+    event = imhdx_photo_for_item(args, item)
+    if not event:
+        event = find_photo_for_item(args, item)
     if not event:
         return {
             "text": (
-                "Achei o item, mas nao achei foto casada perto do horario.\n"
+                "Achei o item, mas nao consegui gerar foto perto do horario.\n"
                 "Cupom %s %s - %s x %s - %s"
             ) % (cupom, item["time"], item["qty"], item["desc"], money_br(item["value"]))
         }
     caption = (
-        "Cupom %s\n%s - %s x %s\nValor: %s\nHora item: %s\nFoto: %s"
+        "Cupom %s\n%s - %s x %s\nValor: %s\nHora item: %s\nFonte: %s"
         % (
             cupom,
             item["code"],
@@ -407,7 +477,7 @@ def product_photo(args, cupom, term):
             item["desc"],
             money_br(item["value"]),
             item["time"],
-            event.get("hora", "-"),
+            event.get("fonte", "auditor local"),
         )
     )
     return {"photo": event["imagem"], "caption": caption}
