@@ -12,6 +12,7 @@ from urllib.parse import quote
 
 import requests
 from requests.auth import HTTPDigestAuth
+from PIL import Image, ImageDraw, ImageFont
 
 
 LINE_RE = re.compile(r"^(?P<time>\d{2}:\d{2}:\d{2}):(?P<event>[A-Z]+)\s*\|\s*(?P<body>.*)$")
@@ -387,7 +388,80 @@ def find_photo_for_item(args, item, seconds=60):
     return best
 
 
-def imhdx_photo_for_item(args, item):
+def text_width(draw, text, font):
+    try:
+        return draw.textbbox((0, 0), text, font=font)[2]
+    except Exception:
+        return draw.textsize(text, font=font)[0]
+
+
+def wrap_text(draw, text, font, max_width):
+    words = text.split()
+    lines = []
+    current = ""
+    for word in words:
+        candidate = (current + " " + word).strip()
+        if current and text_width(draw, candidate, font) > max_width:
+            lines.append(current)
+            current = word
+        else:
+            current = candidate
+    if current:
+        lines.append(current)
+    return lines or [text]
+
+
+def overlay_pdv_caption(args, image_path, cupom, item, source):
+    image_path = Path(image_path)
+    image = Image.open(str(image_path)).convert("RGB")
+    draw = ImageDraw.Draw(image, "RGBA")
+    width, height = image.size
+
+    font_path = first_existing_path([
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    ])
+    if font_path:
+        font = ImageFont.truetype(font_path, 26)
+        small_font = ImageFont.truetype(font_path, 22)
+    else:
+        font = ImageFont.load_default()
+        small_font = font
+    lines = [
+        "PDV %s  CUPOM %s  %s" % (int(args.pdv_station), cupom, item["time"]),
+        "%s x %s" % (item["qty"], item["desc"]),
+        "COD %s  VALOR %s  %s" % (item["code"], money_br(item["value"]), source),
+    ]
+
+    wrapped = []
+    for idx, line in enumerate(lines):
+        wrapped.extend(wrap_text(draw, line, font if idx == 0 else small_font, width - 36))
+
+    line_height = 32
+    box_height = 22 + (len(wrapped) * line_height)
+    draw.rectangle((0, 0, width, min(height, box_height)), fill=(0, 0, 0, 150))
+
+    y = 10
+    for idx, line in enumerate(wrapped):
+        active_font = font if idx == 0 else small_font
+        draw.text((18 + 2, y + 2), line, font=active_font, fill=(0, 0, 0, 220))
+        draw.text((18, y), line, font=active_font, fill=(255, 230, 0, 255))
+        y += line_height
+
+    out_path = image_path.with_name(image_path.stem + "_pdv.jpg")
+    image.save(str(out_path), quality=88)
+    return str(out_path)
+
+
+def first_existing_path(paths):
+    for path in paths:
+        if Path(path).exists():
+            return path
+    return ""
+
+
+def imhdx_photo_for_item(args, cupom, item):
     if not args.imhdx_host or not args.imhdx_user or not args.imhdx_pass:
         return None
 
@@ -439,10 +513,12 @@ def imhdx_photo_for_item(args, item):
             check=False,
         )
         if result.returncode == 0 and jpg_path.exists() and jpg_path.stat().st_size > 1024:
+            source = "Gravacao PDV%s / iMHDX" % int(args.pdv_station)
+            stamped_path = overlay_pdv_caption(args, jpg_path, cupom, item, source)
             return {
-                "imagem": str(jpg_path),
+                "imagem": stamped_path,
                 "hora": item_dt.strftime("%Y-%m-%d %H:%M:%S"),
-                "fonte": "Gravacao PDV%s / iMHDX" % int(args.pdv_station),
+                "fonte": source,
             }
     except Exception:
         return None
@@ -462,9 +538,14 @@ def product_photo(args, cupom, term):
     if not matches:
         return {"text": "Nao achei '%s' no cupom %s." % (term, cupom)}
     item = matches[0]
-    event = imhdx_photo_for_item(args, item)
+    event = imhdx_photo_for_item(args, cupom, item)
     if not event:
         event = find_photo_for_item(args, item)
+        if event:
+            try:
+                event["imagem"] = overlay_pdv_caption(args, event["imagem"], cupom, item, "auditor local")
+            except Exception:
+                pass
     if not event:
         return {
             "text": (

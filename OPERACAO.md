@@ -96,7 +96,8 @@ data seja selecionada.
 
 No comando de foto, o assistente tenta primeiro baixar a gravacao do canal do
 PDV no iMHDX, no horario do item, e extrair um quadro. Se o iMHDX nao responder
-ou nao gerar imagem, ele usa a foto local salva pelo auditor como fallback.
+ou nao gerar imagem, ele usa a foto local salva pelo auditor como fallback. A
+foto enviada no Telegram ja sai com a legenda do PDV sobreposta no print.
 
 ## Causa corrigida em 2026-05-24
 
