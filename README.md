@@ -75,6 +75,7 @@ Comandos principais:
 
 ```text
 /status
+/data 24/05/2026
 /caixa
 /dinheiro
 /cupom 216530
@@ -82,3 +83,6 @@ Comandos principais:
 /suspeitas
 /ajuda
 ```
+
+Pelos botoes do Telegram tambem e possivel escolher a data ativa, informar o
+numero do cupom e pesquisar produto sem digitar o comando completo.

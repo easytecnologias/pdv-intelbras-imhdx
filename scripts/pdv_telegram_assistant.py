@@ -5,7 +5,7 @@ import os
 import re
 import time
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import requests
@@ -56,7 +56,8 @@ def send_message(args, text):
 def main_keyboard():
     return {
         "keyboard": [
-            [{"text": "Status"}, {"text": "Caixa"}],
+            [{"text": "Status"}, {"text": "Data"}],
+            [{"text": "Caixa"}, {"text": "Cupom"}],
             [{"text": "Dinheiro"}, {"text": "Suspeitas"}],
             [{"text": "Ultimo cupom"}, {"text": "Buscar produto"}],
             [{"text": "Ajuda"}],
@@ -67,8 +68,51 @@ def main_keyboard():
     }
 
 
-def today_spy_path(args):
-    name = "Espiao%s.%s" % (datetime.now().strftime("%d%m%y"), args.pdv_station)
+def query_date(args):
+    path = active_date_file(args)
+    if path.exists():
+        try:
+            return datetime.strptime(path.read_text().strip(), "%Y-%m-%d")
+        except Exception:
+            pass
+    return datetime.now()
+
+
+def active_date_file(args):
+    return Path(args.state_dir) / "active_date.txt"
+
+
+def set_query_date(args, dt):
+    path = active_date_file(args)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(dt.strftime("%Y-%m-%d"))
+
+
+def date_label(dt):
+    return dt.strftime("%d/%m/%Y")
+
+
+def parse_date_text(text):
+    clean = text.strip().lower()
+    now = datetime.now()
+    if clean in ("hoje", "hj"):
+        return now
+    if clean in ("ontem",):
+        return now - timedelta(days=1)
+    for fmt in ("%d/%m/%Y", "%d/%m/%y", "%d/%m", "%Y-%m-%d"):
+        try:
+            parsed = datetime.strptime(clean, fmt)
+            if fmt == "%d/%m":
+                parsed = parsed.replace(year=now.year)
+            return parsed
+        except Exception:
+            pass
+    raise ValueError("data invalida")
+
+
+def spy_path(args, dt=None):
+    dt = dt or query_date(args)
+    name = "Espiao%s.%s" % (dt.strftime("%d%m%y"), args.pdv_station)
     return Path(args.pdv_base_dir) / "Cm" / name
 
 
@@ -89,7 +133,7 @@ def parse_fields(body):
 
 
 def read_sales(args):
-    path = today_spy_path(args)
+    path = spy_path(args)
     cups = []
     by_number = {}
     current = None
@@ -176,7 +220,7 @@ def caixa_summary(args):
             payments[payment["desc"] or ("Cod %s" % payment["code"])] += payment["value"]
 
     lines = [
-        "PDV %s - Caixa de hoje" % args.pdv_station,
+        "PDV %s - Caixa %s" % (args.pdv_station, date_label(query_date(args))),
         "Arquivo: %s" % path.name,
         "Cupons fechados: %d" % len(closed),
         "Itens registrados: %d" % item_count,
@@ -201,14 +245,19 @@ def dinheiro_summary(args):
             if "DINHEIRO" in payment["desc"].upper():
                 total += payment["value"]
                 count += 1
-    return "PDV %s - Dinheiro hoje\nLancamentos: %d\nTotal: %s" % (args.pdv_station, count, money_br(total))
+    return "PDV %s - Dinheiro %s\nLancamentos: %d\nTotal: %s" % (
+        args.pdv_station,
+        date_label(query_date(args)),
+        count,
+        money_br(total),
+    )
 
 
 def cupom_detail(args, number):
     _, by_number, _ = read_sales(args)
     cup = by_number.get(number)
     if not cup:
-        return "Nao achei o cupom %s no Espiao de hoje." % number
+        return "Nao achei o cupom %s no Espiao de %s." % (number, date_label(query_date(args)))
 
     lines = [
         "Cupom %s" % cup["number"],
@@ -245,8 +294,8 @@ def search_items(args, term):
             if term_low in item["desc"].lower() or term_low in item["code"]:
                 hits.append((cup, item))
     if not hits:
-        return "Nao achei '%s' nos itens de hoje." % term
-    lines = ["Busca: %s" % term, "Resultados: %d" % len(hits), ""]
+        return "Nao achei '%s' nos itens de %s." % (term, date_label(query_date(args)))
+    lines = ["Busca: %s" % term, "Data: %s" % date_label(query_date(args)), "Resultados: %d" % len(hits), ""]
     for cup, item in hits[-25:]:
         lines.append("Cupom %s %s - %s x %s - %s" % (
             cup.get("number", "-"),
@@ -270,11 +319,12 @@ def suspect_summary(args):
             event = json.loads(line)
         except Exception:
             continue
-        if event.get("tipo") == "suspeita":
+        event_date = str(event.get("hora", ""))[:10]
+        if event.get("tipo") == "suspeita" and event_date == query_date(args).strftime("%Y-%m-%d"):
             rows.append(event)
     if not rows:
-        return "Nenhuma suspeita registrada hoje."
-    lines = ["Ultimas suspeitas:"]
+        return "Nenhuma suspeita registrada em %s." % date_label(query_date(args))
+    lines = ["Ultimas suspeitas em %s:" % date_label(query_date(args))]
     for event in rows[-10:]:
         lines.append("%s score=%s skin=%s\n%s" % (
             event.get("hora", "-"),
@@ -298,6 +348,7 @@ def status(args):
     last_cup = next((cup for cup in reversed(cups) if cup["items"]), None)
     lines = [
         "PDV %s - Assistente ativo" % args.pdv_station,
+        "Data ativa: %s" % date_label(query_date(args)),
         "Espiao: %s" % path,
         "Cupons lidos: %d" % len(cups),
     ]
@@ -311,7 +362,9 @@ def help_text():
     return "\n".join([
         "Toque nos botoes ou digite:",
         "Status",
+        "Data",
         "Caixa",
+        "Cupom",
         "Dinheiro",
         "Ultimo cupom",
         "Buscar produto",
@@ -319,6 +372,7 @@ def help_text():
         "",
         "Tambem aceita:",
         "/cupom 216530",
+        "/data 24/05/2026",
         "/buscar bombom",
         "/produto arroz",
     ])
@@ -333,6 +387,12 @@ def handle_command(args, text):
         return help_text()
     if cmd == "/status":
         return status(args)
+    if cmd == "/data":
+        if not rest:
+            return "Use: /data 24/05/2026\nOu toque em Data e envie hoje, ontem ou dd/mm/aaaa."
+        dt = parse_date_text(rest)
+        set_query_date(args, dt)
+        return "Data ativa alterada para %s." % date_label(dt)
     if cmd == "/caixa":
         return caixa_summary(args)
     if cmd == "/dinheiro":
@@ -340,7 +400,7 @@ def handle_command(args, text):
     if cmd in ("/ultimo", "/ultimocupom"):
         return latest_coupon(args)
     if cmd == "/cupom":
-        return cupom_detail(args, rest) if rest else "Use: /cupom 216530"
+        return cupom_detail(args, rest) if rest else "Digite o numero do cupom. Exemplo: 216530"
     if cmd in ("/buscar", "/produto"):
         return search_items(args, rest) if rest else "Digite assim: /buscar bombom\nOu toque em Buscar produto e depois envie o nome."
     if cmd == "/suspeitas":
@@ -352,7 +412,9 @@ def normalize_button_text(text):
     clean = " ".join(text.strip().split())
     mapping = {
         "status": "/status",
+        "data": "/data",
         "caixa": "/caixa",
+        "cupom": "/cupom",
         "dinheiro": "/dinheiro",
         "suspeitas": "/suspeitas",
         "ajuda": "/ajuda",
@@ -378,25 +440,43 @@ def pending_search_file(args, chat_id):
     return Path(args.state_dir) / ("pending_search_%s.txt" % chat_id)
 
 
+def pending_mode_file(args, chat_id):
+    return Path(args.state_dir) / ("pending_mode_%s.txt" % chat_id)
+
+
 def set_pending_search(args, chat_id):
-    path = pending_search_file(args, chat_id)
+    path = pending_mode_file(args, chat_id)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(str(int(time.time())))
+    path.write_text("search %d" % int(time.time()))
+
+
+def set_pending_mode(args, chat_id, mode):
+    path = pending_mode_file(args, chat_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("%s %d" % (mode, int(time.time())))
 
 
 def pop_pending_search(args, chat_id):
-    path = pending_search_file(args, chat_id)
+    mode = pop_pending_mode(args, chat_id)
+    return mode == "search"
+
+
+def pop_pending_mode(args, chat_id):
+    path = pending_mode_file(args, chat_id)
     if not path.exists():
-        return False
+        return ""
     try:
-        created = int(path.read_text().strip() or "0")
+        content = path.read_text().strip().split()
+        mode = content[0]
+        created = int(content[1]) if len(content) > 1 else 0
     except Exception:
+        mode = ""
         created = 0
     try:
         path.unlink()
     except Exception:
         pass
-    return (time.time() - created) <= 300
+    return mode if (time.time() - created) <= 300 else ""
 
 
 def main():
@@ -425,10 +505,26 @@ def main():
                 try:
                     normalized = normalize_button_text(text)
                     if normalized == "/buscar":
-                        set_pending_search(args, chat.get("id"))
+                        set_pending_mode(args, chat.get("id"), "search")
                         answer = "Qual produto voce quer buscar? Exemplo: bombom, arroz, coca, leite."
-                    elif not text.startswith("/") and pop_pending_search(args, chat.get("id")):
-                        answer = search_items(args, text)
+                    elif normalized == "/data":
+                        set_pending_mode(args, chat.get("id"), "date")
+                        answer = "Qual data voce quer consultar? Envie hoje, ontem ou dd/mm/aaaa."
+                    elif normalized == "/cupom":
+                        set_pending_mode(args, chat.get("id"), "cupom")
+                        answer = "Qual numero do cupom? Exemplo: 216530."
+                    elif not text.startswith("/"):
+                        mode = pop_pending_mode(args, chat.get("id"))
+                        if mode == "search":
+                            answer = search_items(args, text)
+                        elif mode == "date":
+                            dt = parse_date_text(text)
+                            set_query_date(args, dt)
+                            answer = "Data ativa alterada para %s." % date_label(dt)
+                        elif mode == "cupom":
+                            answer = cupom_detail(args, text.strip())
+                        else:
+                            answer = handle_command(args, text)
                     else:
                         answer = handle_command(args, text)
                 except Exception as exc:

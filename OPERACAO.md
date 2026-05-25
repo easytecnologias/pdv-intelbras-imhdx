@@ -69,6 +69,7 @@ Comandos no grupo:
 
 ```text
 /status
+/data 24/05/2026
 /caixa
 /dinheiro
 /cupom 216530
@@ -84,6 +85,10 @@ Exemplos:
 /buscar bombom
 /cupom 216657
 ```
+
+O botao `Data` define a data ativa da consulta. Depois disso, `Caixa`,
+`Dinheiro`, `Cupom`, `Buscar produto` e `Suspeitas` usam essa data ate que outra
+data seja selecionada.
 
 ## Causa corrigida em 2026-05-24
 
