@@ -42,7 +42,29 @@ def api(args, method, **kwargs):
 
 
 def send_message(args, text):
-    api(args, "sendMessage", data={"chat_id": args.chat_id, "text": text[:3900]})
+    api(
+        args,
+        "sendMessage",
+        data={
+            "chat_id": args.chat_id,
+            "text": text[:3900],
+            "reply_markup": json.dumps(main_keyboard()),
+        },
+    )
+
+
+def main_keyboard():
+    return {
+        "keyboard": [
+            [{"text": "Status"}, {"text": "Caixa"}],
+            [{"text": "Dinheiro"}, {"text": "Suspeitas"}],
+            [{"text": "Ultimo cupom"}, {"text": "Buscar bombom"}],
+            [{"text": "Ajuda"}],
+        ],
+        "resize_keyboard": True,
+        "one_time_keyboard": False,
+        "is_persistent": True,
+    }
 
 
 def today_spy_path(args):
@@ -205,7 +227,10 @@ def cupom_detail(args, number):
         lines.append("- %s: %s" % (payment["desc"], money_br(payment["value"])))
     if not cup["payments"]:
         lines.append("- sem pagamento")
-    total = cup.get("total") or cup.get("subtotal") or sum(item["value"] for item in cup["items"])
+    if cup.get("closed"):
+        total = cup.get("total") or cup.get("subtotal") or sum(item["value"] for item in cup["items"])
+    else:
+        total = sum(item["value"] for item in cup["items"])
     lines.append("")
     lines.append("Total: %s" % money_br(total))
     return "\n".join(lines)
@@ -260,6 +285,14 @@ def suspect_summary(args):
     return "\n".join(lines)
 
 
+def latest_coupon(args):
+    cups, _, _ = read_sales(args)
+    for cup in reversed(cups):
+        if cup["items"] or cup["payments"] or cup.get("closed"):
+            return cupom_detail(args, cup["number"])
+    return "Ainda nao achei cupom com movimento hoje."
+
+
 def status(args):
     cups, _, path = read_sales(args)
     last_cup = next((cup for cup in reversed(cups) if cup["items"]), None)
@@ -276,18 +309,22 @@ def status(args):
 
 def help_text():
     return "\n".join([
-        "Comandos:",
-        "/status",
-        "/caixa",
-        "/dinheiro",
+        "Toque nos botoes ou digite:",
+        "Status",
+        "Caixa",
+        "Dinheiro",
+        "Ultimo cupom",
+        "Buscar bombom",
+        "Suspeitas",
+        "",
+        "Tambem aceita:",
         "/cupom 216530",
         "/buscar bombom",
-        "/suspeitas",
-        "/ajuda",
     ])
 
 
 def handle_command(args, text):
+    text = normalize_button_text(text)
     parts = text.strip().split(maxsplit=1)
     cmd = parts[0].lower()
     rest = parts[1].strip() if len(parts) > 1 else ""
@@ -299,6 +336,8 @@ def handle_command(args, text):
         return caixa_summary(args)
     if cmd == "/dinheiro":
         return dinheiro_summary(args)
+    if cmd in ("/ultimo", "/ultimocupom"):
+        return latest_coupon(args)
     if cmd == "/cupom":
         return cupom_detail(args, rest) if rest else "Use: /cupom 216530"
     if cmd in ("/buscar", "/produto"):
@@ -306,6 +345,20 @@ def handle_command(args, text):
     if cmd == "/suspeitas":
         return suspect_summary(args)
     return "Comando nao reconhecido.\n\n%s" % help_text()
+
+
+def normalize_button_text(text):
+    clean = " ".join(text.strip().split())
+    mapping = {
+        "status": "/status",
+        "caixa": "/caixa",
+        "dinheiro": "/dinheiro",
+        "suspeitas": "/suspeitas",
+        "ajuda": "/ajuda",
+        "ultimo cupom": "/ultimo",
+        "buscar bombom": "/buscar bombom",
+    }
+    return mapping.get(clean.lower(), clean)
 
 
 def read_offset(path):
@@ -340,7 +393,7 @@ def main():
                 message = update.get("message") or {}
                 chat = message.get("chat") or {}
                 text = (message.get("text") or "").strip()
-                if str(chat.get("id")) != str(args.chat_id) or not text.startswith("/"):
+                if str(chat.get("id")) != str(args.chat_id):
                     continue
                 print("COMANDO", text, flush=True)
                 try:
