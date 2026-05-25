@@ -74,6 +74,7 @@ Comandos no grupo:
 /dinheiro
 /cupom 216530
 /buscar bombom
+/foto 216657 arroz
 /suspeitas
 /ajuda
 ```
@@ -84,6 +85,8 @@ Exemplos:
 /dinheiro
 /buscar bombom
 /cupom 216657
+/foto 216657 bombom
+produto bombom do cupom 216657
 ```
 
 O botao `Data` define a data ativa da consulta. Depois disso, `Caixa`,

@@ -80,9 +80,11 @@ Comandos principais:
 /dinheiro
 /cupom 216530
 /buscar bombom
+/foto 216657 arroz
 /suspeitas
 /ajuda
 ```
 
 Pelos botoes do Telegram tambem e possivel escolher a data ativa, informar o
-numero do cupom e pesquisar produto sem digitar o comando completo.
+numero do cupom, pesquisar produto sem digitar o comando completo e pedir uma
+foto do produto no cupom.

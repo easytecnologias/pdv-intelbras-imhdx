@@ -53,6 +53,29 @@ def send_message(args, text):
     )
 
 
+def send_photo(args, image_path, caption):
+    with open(str(image_path), "rb") as photo:
+        api(
+            args,
+            "sendPhoto",
+            data={
+                "chat_id": args.chat_id,
+                "caption": caption[:1024],
+                "reply_markup": json.dumps(main_keyboard()),
+            },
+            files={"photo": photo},
+        )
+
+
+def send_response(args, response):
+    if isinstance(response, dict) and response.get("photo"):
+        send_photo(args, response["photo"], response.get("caption", ""))
+    elif isinstance(response, dict):
+        send_message(args, response.get("text", "Sem resposta."))
+    else:
+        send_message(args, str(response))
+
+
 def main_keyboard():
     return {
         "keyboard": [
@@ -60,6 +83,7 @@ def main_keyboard():
             [{"text": "Caixa"}, {"text": "Cupom"}],
             [{"text": "Dinheiro"}, {"text": "Suspeitas"}],
             [{"text": "Ultimo cupom"}, {"text": "Buscar produto"}],
+            [{"text": "Foto produto"}],
             [{"text": "Ajuda"}],
         ],
         "resize_keyboard": True,
@@ -309,6 +333,97 @@ def search_items(args, term):
     return "\n".join(lines)
 
 
+def parse_event_time(value):
+    return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+
+
+def item_datetime(args, item):
+    dt = query_date(args)
+    return datetime.strptime(dt.strftime("%Y-%m-%d") + " " + item["time"], "%Y-%m-%d %H:%M:%S")
+
+
+def find_photo_for_item(args, item, seconds=60):
+    events_path = Path(args.events_file)
+    if not events_path.exists():
+        return None
+    item_dt = item_datetime(args, item)
+    best = None
+    best_delta = None
+    desc = item["desc"].lower()
+    code = item["code"]
+    for line in events_path.read_text(errors="replace").splitlines():
+        try:
+            event = json.loads(line)
+        except Exception:
+            continue
+        if event.get("tipo") != "casou":
+            continue
+        try:
+            event_dt = parse_event_time(event.get("hora", ""))
+        except Exception:
+            continue
+        delta = abs((event_dt - item_dt).total_seconds())
+        if delta > seconds:
+            continue
+        reason = str(event.get("motivo", "")).lower()
+        if code and code not in event.get("motivo", "") and desc not in reason:
+            continue
+        image = event.get("imagem")
+        if not image or not Path(image).exists():
+            continue
+        if best is None or delta < best_delta:
+            best = event
+            best_delta = delta
+    return best
+
+
+def product_photo(args, cupom, term):
+    _, by_number, _ = read_sales(args)
+    cup = by_number.get(str(cupom).strip())
+    if not cup:
+        return {"text": "Nao achei o cupom %s em %s." % (cupom, date_label(query_date(args)))}
+    term_low = term.lower().strip()
+    matches = [
+        item for item in cup["items"]
+        if term_low in item["desc"].lower() or term_low in item["code"]
+    ]
+    if not matches:
+        return {"text": "Nao achei '%s' no cupom %s." % (term, cupom)}
+    item = matches[0]
+    event = find_photo_for_item(args, item)
+    if not event:
+        return {
+            "text": (
+                "Achei o item, mas nao achei foto casada perto do horario.\n"
+                "Cupom %s %s - %s x %s - %s"
+            ) % (cupom, item["time"], item["qty"], item["desc"], money_br(item["value"]))
+        }
+    caption = (
+        "Cupom %s\n%s - %s x %s\nValor: %s\nHora item: %s\nFoto: %s"
+        % (
+            cupom,
+            item["code"],
+            item["qty"],
+            item["desc"],
+            money_br(item["value"]),
+            item["time"],
+            event.get("hora", "-"),
+        )
+    )
+    return {"photo": event["imagem"], "caption": caption}
+
+
+def parse_product_photo_request(text):
+    clean = " ".join(text.strip().split())
+    match = re.match(r"(?i)^produto\s+(.+?)\s+(?:do\s+)?cupom\s+(\d+)$", clean)
+    if match:
+        return match.group(2), match.group(1).strip()
+    match = re.match(r"(?i)^foto\s+produto\s+(.+?)\s+(?:do\s+)?cupom\s+(\d+)$", clean)
+    if match:
+        return match.group(2), match.group(1).strip()
+    return None
+
+
 def suspect_summary(args):
     path = Path(args.events_file)
     if not path.exists():
@@ -368,6 +483,7 @@ def help_text():
         "Dinheiro",
         "Ultimo cupom",
         "Buscar produto",
+        "Foto produto",
         "Suspeitas",
         "",
         "Tambem aceita:",
@@ -375,10 +491,16 @@ def help_text():
         "/data 24/05/2026",
         "/buscar bombom",
         "/produto arroz",
+        "/foto 216657 arroz",
+        "produto arroz do cupom 216657",
     ])
 
 
 def handle_command(args, text):
+    natural_photo = parse_product_photo_request(text)
+    if natural_photo:
+        cupom, term = natural_photo
+        return product_photo(args, cupom, term)
     text = normalize_button_text(text)
     parts = text.strip().split(maxsplit=1)
     cmd = parts[0].lower()
@@ -403,6 +525,11 @@ def handle_command(args, text):
         return cupom_detail(args, rest) if rest else "Digite o numero do cupom. Exemplo: 216530"
     if cmd in ("/buscar", "/produto"):
         return search_items(args, rest) if rest else "Digite assim: /buscar bombom\nOu toque em Buscar produto e depois envie o nome."
+    if cmd in ("/foto", "/imagem", "/print"):
+        photo_parts = rest.split(maxsplit=1)
+        if len(photo_parts) < 2:
+            return "Use: /foto 216657 arroz\nOu: produto arroz do cupom 216657"
+        return product_photo(args, photo_parts[0], photo_parts[1])
     if cmd == "/suspeitas":
         return suspect_summary(args)
     return "Comando nao reconhecido.\n\n%s" % help_text()
@@ -420,6 +547,7 @@ def normalize_button_text(text):
         "ajuda": "/ajuda",
         "ultimo cupom": "/ultimo",
         "buscar produto": "/buscar",
+        "foto produto": "/foto",
     }
     return mapping.get(clean.lower(), clean)
 
@@ -513,6 +641,9 @@ def main():
                     elif normalized == "/cupom":
                         set_pending_mode(args, chat.get("id"), "cupom")
                         answer = "Qual numero do cupom? Exemplo: 216530."
+                    elif normalized == "/foto":
+                        set_pending_mode(args, chat.get("id"), "photo")
+                        answer = "Envie o cupom e o produto. Exemplo: 216657 arroz."
                     elif not text.startswith("/"):
                         mode = pop_pending_mode(args, chat.get("id"))
                         if mode == "search":
@@ -523,13 +654,19 @@ def main():
                             answer = "Data ativa alterada para %s." % date_label(dt)
                         elif mode == "cupom":
                             answer = cupom_detail(args, text.strip())
+                        elif mode == "photo":
+                            photo_parts = text.strip().split(maxsplit=1)
+                            if len(photo_parts) < 2:
+                                answer = "Envie assim: 216657 arroz."
+                            else:
+                                answer = product_photo(args, photo_parts[0], photo_parts[1])
                         else:
                             answer = handle_command(args, text)
                     else:
                         answer = handle_command(args, text)
                 except Exception as exc:
                     answer = "Erro ao executar comando: %s %s" % (type(exc).__name__, exc)
-                send_message(args, answer)
+                send_response(args, answer)
         except Exception as exc:
             print("ASSISTENTE_ERRO", type(exc).__name__, exc, flush=True)
             time.sleep(5)
