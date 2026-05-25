@@ -58,7 +58,7 @@ def main_keyboard():
         "keyboard": [
             [{"text": "Status"}, {"text": "Caixa"}],
             [{"text": "Dinheiro"}, {"text": "Suspeitas"}],
-            [{"text": "Ultimo cupom"}, {"text": "Buscar bombom"}],
+            [{"text": "Ultimo cupom"}, {"text": "Buscar produto"}],
             [{"text": "Ajuda"}],
         ],
         "resize_keyboard": True,
@@ -314,12 +314,13 @@ def help_text():
         "Caixa",
         "Dinheiro",
         "Ultimo cupom",
-        "Buscar bombom",
+        "Buscar produto",
         "Suspeitas",
         "",
         "Tambem aceita:",
         "/cupom 216530",
         "/buscar bombom",
+        "/produto arroz",
     ])
 
 
@@ -341,7 +342,7 @@ def handle_command(args, text):
     if cmd == "/cupom":
         return cupom_detail(args, rest) if rest else "Use: /cupom 216530"
     if cmd in ("/buscar", "/produto"):
-        return search_items(args, rest) if rest else "Use: /buscar bombom"
+        return search_items(args, rest) if rest else "Digite assim: /buscar bombom\nOu toque em Buscar produto e depois envie o nome."
     if cmd == "/suspeitas":
         return suspect_summary(args)
     return "Comando nao reconhecido.\n\n%s" % help_text()
@@ -356,7 +357,7 @@ def normalize_button_text(text):
         "suspeitas": "/suspeitas",
         "ajuda": "/ajuda",
         "ultimo cupom": "/ultimo",
-        "buscar bombom": "/buscar bombom",
+        "buscar produto": "/buscar",
     }
     return mapping.get(clean.lower(), clean)
 
@@ -371,6 +372,31 @@ def read_offset(path):
 def write_offset(path, offset):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(str(offset))
+
+
+def pending_search_file(args, chat_id):
+    return Path(args.state_dir) / ("pending_search_%s.txt" % chat_id)
+
+
+def set_pending_search(args, chat_id):
+    path = pending_search_file(args, chat_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(str(int(time.time())))
+
+
+def pop_pending_search(args, chat_id):
+    path = pending_search_file(args, chat_id)
+    if not path.exists():
+        return False
+    try:
+        created = int(path.read_text().strip() or "0")
+    except Exception:
+        created = 0
+    try:
+        path.unlink()
+    except Exception:
+        pass
+    return (time.time() - created) <= 300
 
 
 def main():
@@ -397,7 +423,14 @@ def main():
                     continue
                 print("COMANDO", text, flush=True)
                 try:
-                    answer = handle_command(args, text)
+                    normalized = normalize_button_text(text)
+                    if normalized == "/buscar":
+                        set_pending_search(args, chat.get("id"))
+                        answer = "Qual produto voce quer buscar? Exemplo: bombom, arroz, coca, leite."
+                    elif not text.startswith("/") and pop_pending_search(args, chat.get("id")):
+                        answer = search_items(args, text)
+                    else:
+                        answer = handle_command(args, text)
                 except Exception as exc:
                     answer = "Erro ao executar comando: %s %s" % (type(exc).__name__, exc)
                 send_message(args, answer)
