@@ -1,0 +1,16 @@
+[Unit]
+Description=PDV1 Telegram Assistant
+After=network-online.target pdv-camera-auditor.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/pdv-telegram-assistant.env
+ExecStart=/usr/bin/python3 /opt/pdv-telegram-assistant/pdv_telegram_assistant.py
+Restart=always
+RestartSec=5
+User=root
+WorkingDirectory=/opt/pdv-telegram-assistant
+
+[Install]
+WantedBy=multi-user.target

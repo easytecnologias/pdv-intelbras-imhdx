@@ -8,6 +8,7 @@ Pacote de integracao entre WRPDV/Sierra e gravador Intelbras iMHDX.
 - `scripts/pdv_intelbras_bridge.py`: servico Python instalado nos PDVs Linux.
 - `scripts/pdv_camera_auditor.py`: prototipo de auditoria por camera para cruzar movimento na area do scanner com eventos do PDV.
 - `scripts/pdv_camera_auditor_linux.py`: auditor local para rodar direto no PDV Linux, sem depender do Windows.
+- `scripts/pdv_telegram_assistant.py`: assistente Telegram para consultar caixa, dinheiro, cupom, produtos e suspeitas do PDV.
 - `scripts/install_bridge_pdv.sh`: instalador generico da ponte no PDV.
 - `services/*.service`: unidades systemd usadas nos PDVs.
 
@@ -63,3 +64,21 @@ Quando existe `CSP`, o auditor segura o alerta porque o operador pode estar com
 o produto parado na area enquanto consulta o sistema. O alerta suspeito so deve
 sair quando ha movimento no scanner sem `VIT` correspondente depois da janela de
 espera.
+
+## Assistente Telegram
+
+O assistente roda separado do auditor, pelo servico
+`pdv-telegram-assistant.service`. Ele responde comandos no grupo configurado no
+PDV e le o Espiao local do dia.
+
+Comandos principais:
+
+```text
+/status
+/caixa
+/dinheiro
+/cupom 216530
+/buscar bombom
+/suspeitas
+/ajuda
+```

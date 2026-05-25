@@ -56,6 +56,35 @@ tail -n 20 /var/log/pdv-camera-auditor/events.jsonl
 find /var/log/pdv-camera-auditor/evidencias -type f | tail
 ```
 
+## Assistente Telegram no PDV1
+
+Servico:
+
+```sh
+systemctl status pdv-telegram-assistant.service
+journalctl -u pdv-telegram-assistant.service -n 80 --no-pager
+```
+
+Comandos no grupo:
+
+```text
+/status
+/caixa
+/dinheiro
+/cupom 216530
+/buscar bombom
+/suspeitas
+/ajuda
+```
+
+Exemplos:
+
+```text
+/dinheiro
+/buscar bombom
+/cupom 216657
+```
+
 ## Causa corrigida em 2026-05-24
 
 A ponte ficava presa no arquivo do dia anterior quando o arquivo antigo continuava existindo.
