@@ -806,6 +806,19 @@ def parse_product_photo_request(text):
     return split_cupom_product(clean)
 
 
+def clean_search_term(text):
+    clean = " ".join(text.strip().split())
+    parsed = split_cupom_product(clean)
+    if parsed:
+        return parsed[1]
+    parts = clean.split()
+    if len(parts) > 1 and parts[0].isdigit():
+        return " ".join(parts[1:])
+    if len(parts) > 1 and parts[-1].isdigit():
+        return " ".join(parts[:-1])
+    return clean
+
+
 def suspect_summary(args):
     path = Path(args.events_file)
     if not path.exists():
@@ -872,10 +885,6 @@ def help_text():
 
 
 def handle_command(args, text):
-    natural_photo = parse_product_photo_request(text)
-    if natural_photo:
-        cupom, term = natural_photo
-        return product_photo(args, cupom, term)
     text = normalize_button_text(text)
     parts = text.strip().split(maxsplit=1)
     cmd = parts[0].lower()
@@ -899,7 +908,8 @@ def handle_command(args, text):
     if cmd == "/cupom":
         return cupom_detail(args, rest) if rest else "Digite o numero do cupom. Exemplo: 216530"
     if cmd in ("/buscar", "/produto"):
-        return search_items(args, rest) if rest else "Digite assim: /buscar bombom\nOu toque em Buscar produto e depois envie o nome."
+        term = clean_search_term(rest)
+        return search_items(args, term) if term else "Digite assim: /buscar bombom\nOu toque em Buscar produto e depois envie o nome."
     if cmd in ("/foto", "/imagem", "/print"):
         parsed = split_cupom_product(rest)
         if not parsed:
@@ -1084,8 +1094,9 @@ def main():
                     elif not text.startswith("/"):
                         mode = pop_pending_mode(args, chat.get("id"))
                         if mode == "search":
-                            save_product_search(args, chat.get("id"), text)
-                            answer = search_items(args, text)
+                            term = clean_search_term(text)
+                            save_product_search(args, chat.get("id"), term)
+                            answer = search_items(args, term)
                         elif mode == "date":
                             dt = parse_date_text(text)
                             set_query_date(args, dt)
@@ -1100,11 +1111,11 @@ def main():
                                 answer = product_photo(args, parsed[0], parsed[1])
                         else:
                             if normalized.startswith("/buscar ") or normalized.startswith("/produto "):
-                                save_product_search(args, chat.get("id"), normalized.split(maxsplit=1)[1])
+                                save_product_search(args, chat.get("id"), clean_search_term(normalized.split(maxsplit=1)[1]))
                             answer = handle_command(args, text)
                     else:
                         if normalized.startswith("/buscar ") or normalized.startswith("/produto "):
-                            save_product_search(args, chat.get("id"), normalized.split(maxsplit=1)[1])
+                            save_product_search(args, chat.get("id"), clean_search_term(normalized.split(maxsplit=1)[1]))
                         answer = handle_command(args, text)
                 except Exception as exc:
                     answer = "Erro ao executar comando: %s %s" % (type(exc).__name__, exc)
