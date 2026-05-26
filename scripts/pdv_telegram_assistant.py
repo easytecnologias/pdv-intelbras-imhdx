@@ -627,17 +627,29 @@ def latest_coupon(args):
 
 
 def status(args):
-    cups, _, path = read_sales(args)
+    cups, _, _ = read_sales(args)
     last_cup = next((cup for cup in reversed(cups) if cup["items"]), None)
+    closed = [cup for cup in cups if cup.get("closed")]
+    item_count = sum(len(cup["items"]) for cup in cups)
+    total = sum(cup.get("total") or cup.get("subtotal") or sum(item["value"] for item in cup["items"]) for cup in closed)
     lines = [
-        "PDV %s - Assistente ativo" % args.pdv_station,
-        "Data ativa: %s" % date_label(query_date(args)),
-        "Espiao: %s" % path,
-        "Cupons lidos: %d" % len(cups),
+        "✅ PDV %s online" % args.pdv_station,
+        "",
+        "📅 Data da consulta: %s" % date_label(query_date(args)),
+        "🧾 Cupons fechados: %d" % len(closed),
+        "📦 Itens registrados: %d" % item_count,
+        "💰 Total vendido: %s" % money_br(total),
     ]
     if last_cup:
         last_item = last_cup["items"][-1]
-        lines.append("Ultimo item: cupom %s %s - %s" % (last_cup.get("number", "-"), last_item["time"], last_item["desc"]))
+        lines.extend([
+            "",
+            "🕒 Ultimo movimento",
+            "Cupom %s - %s" % (last_cup.get("number", "-"), last_item["time"]),
+            "%s x %s" % (last_item["qty"], last_item["desc"]),
+        ])
+    else:
+        lines.extend(["", "🕒 Ainda sem movimento registrado para esta data."])
     return "\n".join(lines)
 
 
