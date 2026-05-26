@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import calendar
 import json
 import os
 import re
@@ -61,7 +62,53 @@ def send_message(args, text):
             "text": text[:3900],
             "reply_markup": json.dumps(main_keyboard()),
         },
+        )
+
+
+def send_calendar(args, dt=None):
+    dt = dt or query_date(args)
+    api(
+        args,
+        "sendMessage",
+        data={
+            "chat_id": args.chat_id,
+            "text": calendar_title(dt),
+            "reply_markup": json.dumps(calendar_keyboard(args, dt)),
+        },
     )
+
+
+def edit_calendar(args, chat_id, message_id, dt):
+    api(
+        args,
+        "editMessageText",
+        data={
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": calendar_title(dt),
+            "reply_markup": json.dumps(calendar_keyboard(args, dt)),
+        },
+    )
+
+
+def edit_message(args, chat_id, message_id, text):
+    api(
+        args,
+        "editMessageText",
+        data={
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": text[:3900],
+        },
+    )
+
+
+def delete_message(args, chat_id, message_id):
+    api(args, "deleteMessage", data={"chat_id": chat_id, "message_id": message_id})
+
+
+def answer_callback(args, callback_id, text=""):
+    api(args, "answerCallbackQuery", data={"callback_query_id": callback_id, "text": text[:180]})
 
 
 def send_photo(args, image_path, caption):
@@ -101,6 +148,66 @@ def main_keyboard():
         "one_time_keyboard": False,
         "is_persistent": True,
     }
+
+
+MONTHS_BR = [
+    "",
+    "Janeiro",
+    "Fevereiro",
+    "Marco",
+    "Abril",
+    "Maio",
+    "Junho",
+    "Julho",
+    "Agosto",
+    "Setembro",
+    "Outubro",
+    "Novembro",
+    "Dezembro",
+]
+
+
+def calendar_title(dt):
+    return "📅 Escolha a data\n%s de %s" % (MONTHS_BR[dt.month], dt.year)
+
+
+def add_month(dt, months):
+    month = dt.month - 1 + months
+    year = dt.year + month // 12
+    month = month % 12 + 1
+    day = min(dt.day, calendar.monthrange(year, month)[1])
+    return dt.replace(year=year, month=month, day=day)
+
+
+def calendar_keyboard(args, dt):
+    first_weekday, days_in_month = calendar.monthrange(dt.year, dt.month)
+    active = query_date(args)
+    rows = [
+        [{"text": "◀️", "callback_data": "cal:%s" % add_month(dt, -1).strftime("%Y-%m")},
+         {"text": "%s %s" % (MONTHS_BR[dt.month], dt.year), "callback_data": "noop"},
+         {"text": "▶️", "callback_data": "cal:%s" % add_month(dt, 1).strftime("%Y-%m")}],
+        [{"text": "Seg", "callback_data": "noop"}, {"text": "Ter", "callback_data": "noop"}, {"text": "Qua", "callback_data": "noop"},
+         {"text": "Qui", "callback_data": "noop"}, {"text": "Sex", "callback_data": "noop"}, {"text": "Sab", "callback_data": "noop"},
+         {"text": "Dom", "callback_data": "noop"}],
+    ]
+    week = [{"text": " ", "callback_data": "noop"} for _ in range(first_weekday)]
+    for day in range(1, days_in_month + 1):
+        date_value = dt.replace(day=day)
+        label = str(day)
+        if date_value.strftime("%Y-%m-%d") == active.strftime("%Y-%m-%d"):
+            label = "✅ %s" % day
+        week.append({"text": label, "callback_data": "date:%s" % date_value.strftime("%Y-%m-%d")})
+        if len(week) == 7:
+            rows.append(week)
+            week = []
+    if week:
+        week.extend([{"text": " ", "callback_data": "noop"} for _ in range(7 - len(week))])
+        rows.append(week)
+    rows.append([
+        {"text": "Hoje", "callback_data": "date:%s" % datetime.now().strftime("%Y-%m-%d")},
+        {"text": "Fechar", "callback_data": "close"},
+    ])
+    return {"inline_keyboard": rows}
 
 
 def query_date(args):
@@ -788,6 +895,42 @@ def pop_pending_mode(args, chat_id):
     return mode if (time.time() - created) <= 300 else ""
 
 
+def handle_callback(args, callback):
+    callback_id = callback.get("id")
+    data = callback.get("data") or ""
+    print("CALLBACK", data, flush=True)
+    message = callback.get("message") or {}
+    chat = message.get("chat") or {}
+    chat_id = chat.get("id")
+    message_id = message.get("message_id")
+    if str(chat_id) != str(args.chat_id):
+        if callback_id:
+            answer_callback(args, callback_id, "Chat nao autorizado.")
+        return
+
+    if data == "noop":
+        answer_callback(args, callback_id)
+        return
+    if data == "close":
+        answer_callback(args, callback_id, "Calendario fechado.")
+        delete_message(args, chat_id, message_id)
+        return
+    if data.startswith("cal:"):
+        dt = datetime.strptime(data[4:] + "-01", "%Y-%m-%d")
+        edit_calendar(args, chat_id, message_id, dt)
+        answer_callback(args, callback_id)
+        return
+    if data.startswith("date:"):
+        dt = datetime.strptime(data[5:], "%Y-%m-%d")
+        set_query_date(args, dt)
+        text = "✅ Data ativa alterada para %s." % date_label(dt)
+        edit_message(args, chat_id, message_id, text)
+        answer_callback(args, callback_id, text)
+        send_message(args, text)
+        return
+    answer_callback(args, callback_id)
+
+
 def main():
     args = parse_args()
     state_dir = Path(args.state_dir)
@@ -800,11 +943,18 @@ def main():
             updates = api(
                 args,
                 "getUpdates",
-                data={"offset": offset + 1, "timeout": args.poll_timeout, "allowed_updates": json.dumps(["message"])},
+                data={"offset": offset + 1, "timeout": args.poll_timeout, "allowed_updates": json.dumps(["message", "callback_query"])},
             )
             for update in updates:
                 offset = max(offset, int(update["update_id"]))
                 write_offset(offset_file, offset)
+                callback = update.get("callback_query")
+                if callback:
+                    try:
+                        handle_callback(args, callback)
+                    except Exception as exc:
+                        print("CALLBACK_ERRO", type(exc).__name__, exc, flush=True)
+                    continue
                 message = update.get("message") or {}
                 chat = message.get("chat") or {}
                 text = (message.get("text") or "").strip()
@@ -817,8 +967,8 @@ def main():
                         set_pending_mode(args, chat.get("id"), "search")
                         answer = "Qual produto voce quer buscar? Exemplo: bombom, arroz, coca, leite."
                     elif normalized == "/data":
-                        set_pending_mode(args, chat.get("id"), "date")
-                        answer = "Qual data voce quer consultar? Envie hoje, ontem ou dd/mm/aaaa."
+                        send_calendar(args)
+                        continue
                     elif normalized == "/cupom":
                         set_pending_mode(args, chat.get("id"), "cupom")
                         answer = "Qual numero do cupom? Exemplo: 216530."
