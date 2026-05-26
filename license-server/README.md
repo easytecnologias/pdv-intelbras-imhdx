@@ -20,6 +20,8 @@ DATABASE_URL=<Internal Database URL do Render Postgres>
 ADMIN_TOKEN=<token grande para chamadas administrativas>
 LICENSE_SECRET=<segredo grande para assinatura das licencas>
 ASAAS_WEBHOOK_TOKEN=<token configurado no webhook do Asaas>
+ASAAS_API_KEY=<chave de API de producao do Asaas>
+ASAAS_BASE_URL=https://api.asaas.com/v3
 ```
 
 ## Endpoints
@@ -29,6 +31,7 @@ GET  /health
 POST /admin/pdvs
 GET  /admin/pdvs
 POST /admin/renew
+POST /admin/asaas/pix-charge
 POST /licenses/check
 POST /webhooks/asaas
 ```
@@ -63,6 +66,27 @@ curl -X POST https://seu-servico.onrender.com/admin/pdvs \
 Use `payment_reference` como `externalReference` na cobranca do Asaas. Quando o
 Pix for confirmado, o webhook renova a licenca encontrada por essa referencia
 por mais 30 dias.
+
+## Criar cobranca Pix pelo Asaas
+
+```sh
+curl -X POST https://seu-servico.onrender.com/admin/asaas/pix-charge \
+  -H "Content-Type: application/json" \
+  -H "X-Admin-Token: $ADMIN_TOKEN" \
+  -d '{
+    "license_key": "pdv_xxxxx",
+    "customer_name": "Mercado Exemplo",
+    "customer_cpf_cnpj": "00000000000",
+    "customer_email": "cliente@example.com",
+    "customer_mobile_phone": "11999999999",
+    "value": 79.0,
+    "due_date": "2026-06-02",
+    "description": "Licenca mensal PDV 001"
+  }'
+```
+
+Essa rota cria o cliente no Asaas e uma cobranca `PIX` com `externalReference`
+igual a referencia da licenca. Assim o webhook sabe exatamente qual PDV renovar.
 
 ## Verificar Licenca
 

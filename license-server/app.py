@@ -7,6 +7,7 @@ from typing import Any
 from uuid import uuid4
 
 import psycopg
+import requests
 from fastapi import FastAPI, Header, HTTPException, Request
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
@@ -136,6 +137,17 @@ class RenewIn(BaseModel):
 class CheckIn(BaseModel):
     license_key: str
     device_id: str = ""
+
+
+class AsaasPixChargeIn(BaseModel):
+    license_key: str
+    customer_name: str
+    customer_cpf_cnpj: str
+    customer_email: str = ""
+    customer_mobile_phone: str = ""
+    value: float = 79.0
+    due_date: str
+    description: str = "Licenca mensal PDV Auditoria"
 
 
 @app.get("/")
@@ -274,6 +286,75 @@ def check_license(data: CheckIn):
         "pdv_number": row["pdv_number"],
         "valid_until": row["valid_until"].isoformat(),
         "signature": license_signature(row["license_key"], row["valid_until"], row.get("device_id") or ""),
+    }
+
+
+def asaas_request(method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    api_key = env("ASAAS_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="ASAAS_API_KEY ausente")
+    base_url = env("ASAAS_BASE_URL", "https://api.asaas.com/v3").rstrip("/")
+    response = requests.request(
+        method,
+        "%s/%s" % (base_url, path.lstrip("/")),
+        headers={
+            "accept": "application/json",
+            "content-type": "application/json",
+            "access_token": api_key,
+            "User-Agent": "PDVLicenseServer/0.1.0",
+        },
+        json=payload,
+        timeout=30,
+    )
+    try:
+        body = response.json()
+    except Exception:
+        body = {"text": response.text[:500]}
+    if response.status_code >= 400:
+        raise HTTPException(status_code=response.status_code, detail=body)
+    return body
+
+
+@app.post("/admin/asaas/pix-charge")
+def create_asaas_pix_charge(data: AsaasPixChargeIn, x_admin_token: str | None = Header(None)):
+    require_admin(x_admin_token)
+    with connect() as conn:
+        row = conn.execute(
+            "select license_key, payment_reference, pdv_number from pdv_licenses where license_key = %s",
+            (data.license_key,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="licenca nao encontrada")
+
+    payment_reference = row["payment_reference"] or data.license_key
+    customer = asaas_request(
+        "POST",
+        "/customers",
+        {
+            "name": data.customer_name,
+            "cpfCnpj": data.customer_cpf_cnpj,
+            "email": data.customer_email,
+            "mobilePhone": data.customer_mobile_phone,
+            "externalReference": payment_reference,
+        },
+    )
+    payment = asaas_request(
+        "POST",
+        "/payments",
+        {
+            "customer": customer["id"],
+            "billingType": "PIX",
+            "value": data.value,
+            "dueDate": data.due_date,
+            "description": data.description,
+            "externalReference": payment_reference,
+        },
+    )
+    return {
+        "customer": customer,
+        "payment": payment,
+        "payment_reference": payment_reference,
+        "license_key": data.license_key,
     }
 
 
