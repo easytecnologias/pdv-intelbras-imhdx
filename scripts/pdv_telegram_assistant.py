@@ -62,7 +62,24 @@ def send_message(args, text):
             "text": text[:3900],
             "reply_markup": json.dumps(main_keyboard()),
         },
-        )
+    )
+
+
+def refresh_menu_keyboard(args):
+    result = api(
+        args,
+        "sendMessage",
+        data={
+            "chat_id": args.chat_id,
+            "text": "Menu",
+            "reply_markup": json.dumps(main_keyboard()),
+        },
+    )
+    time.sleep(1)
+    try:
+        delete_message(args, args.chat_id, result.get("message_id"))
+    except Exception:
+        pass
 
 
 def send_calendar(args, dt=None):
@@ -146,6 +163,7 @@ def main_keyboard():
         "resize_keyboard": True,
         "one_time_keyboard": False,
         "is_persistent": True,
+        "input_field_placeholder": "Escolha uma opcao",
     }
 
 
@@ -917,6 +935,10 @@ def main():
     offset_file = state_dir / "offset.txt"
     offset = read_offset(offset_file)
     print("ASSISTENTE_INICIO", datetime.now().strftime("%Y-%m-%d %H:%M:%S"), flush=True)
+    try:
+        refresh_menu_keyboard(args)
+    except Exception as exc:
+        print("MENU_REFRESH_ERRO", type(exc).__name__, exc, flush=True)
 
     while True:
         try:
