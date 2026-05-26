@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import time
+import unicodedata
 from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -283,8 +284,29 @@ def money(value):
 
 
 def money_br(value):
-    text = "%.2f" % value
-    return "R$ " + text.replace(".", ",")
+    text = "{:,.2f}".format(value)
+    return "R$ " + text.replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def normalize_text(value):
+    text = unicodedata.normalize("NFKD", str(value or ""))
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    return text.upper()
+
+
+def payment_icon(name):
+    clean = normalize_text(name)
+    if "PIX" in clean:
+        return "🔷"
+    if "DINHEIRO" in clean:
+        return "💵"
+    if "CREDITO" in clean:
+        return "💳"
+    if "DEBITO" in clean:
+        return "🏧"
+    if "CARTAO" in clean or "POS" in clean:
+        return "💳"
+    return "💰"
 
 
 def parse_fields(body):
@@ -390,7 +412,7 @@ def caixa_summary(args):
     ]
     if payments:
         for name, value in sorted(payments.items()):
-            lines.append("• %s: %s" % (name.title(), money_br(value)))
+            lines.append("%s %s: %s" % (payment_icon(name), name.title(), money_br(value)))
     else:
         lines.append("• Sem pagamentos registrados ainda")
     return "\n".join(lines)
