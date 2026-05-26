@@ -142,7 +142,6 @@ def main_keyboard():
             [{"text": "Dinheiro"}, {"text": "Suspeitas"}],
             [{"text": "Ultimo cupom"}, {"text": "Buscar produto"}],
             [{"text": "Foto produto"}],
-            [{"text": "Ajuda"}],
         ],
         "resize_keyboard": True,
         "one_time_keyboard": False,
@@ -761,27 +760,7 @@ def status(args):
 
 
 def help_text():
-    return "\n".join([
-        "Toque nos botoes ou digite:",
-        "Status",
-        "Data",
-        "Caixa",
-        "Cupom",
-        "Dinheiro",
-        "Ultimo cupom",
-        "Buscar produto",
-        "Foto produto",
-        "Suspeitas",
-        "",
-        "Tambem aceita:",
-        "/cupom 216530",
-        "/data 24/05/2026",
-        "/buscar bombom",
-        "/produto arroz",
-        "/foto 216657 arroz",
-        "arroz 216657",
-        "produto arroz do cupom 216657",
-    ])
+    return "Menu atualizado. Use os botoes fixos abaixo."
 
 
 def handle_command(args, text):
@@ -793,7 +772,7 @@ def handle_command(args, text):
     parts = text.strip().split(maxsplit=1)
     cmd = parts[0].lower()
     rest = parts[1].strip() if len(parts) > 1 else ""
-    if cmd in ("/ajuda", "/help", "/start"):
+    if cmd in ("/ajuda", "/help", "/start", "/menu"):
         return help_text()
     if cmd == "/status":
         return status(args)
@@ -833,6 +812,7 @@ def normalize_button_text(text):
         "dinheiro": "/dinheiro",
         "suspeitas": "/suspeitas",
         "ajuda": "/ajuda",
+        "menu": "/menu",
         "ultimo cupom": "/ultimo",
         "buscar produto": "/buscar",
         "foto produto": "/foto",
