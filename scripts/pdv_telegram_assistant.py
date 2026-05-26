@@ -19,6 +19,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 LINE_RE = re.compile(r"^(?P<time>\d{2}:\d{2}:\d{2}):(?P<event>[A-Z]+)\s*\|\s*(?P<body>.*)$")
 FIELD_RE = re.compile(r"(\w+):\s*([^|]+)")
+SEARCH_PAGE_SIZE = 10
 
 
 def parse_args():
@@ -54,14 +55,14 @@ def api(args, method, **kwargs):
     return payload["result"]
 
 
-def send_message(args, text):
+def send_message(args, text, reply_markup=None):
     api(
         args,
         "sendMessage",
         data={
             "chat_id": args.chat_id,
             "text": text[:3900],
-            "reply_markup": json.dumps(main_keyboard()),
+            "reply_markup": json.dumps(reply_markup or main_keyboard()),
         },
     )
 
@@ -109,15 +110,18 @@ def edit_calendar(args, chat_id, message_id, dt):
     )
 
 
-def edit_message(args, chat_id, message_id, text):
+def edit_message(args, chat_id, message_id, text, reply_markup=None):
+    data = {
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "text": text[:3900],
+    }
+    if reply_markup:
+        data["reply_markup"] = json.dumps(reply_markup)
     api(
         args,
         "editMessageText",
-        data={
-            "chat_id": chat_id,
-            "message_id": message_id,
-            "text": text[:3900],
-        },
+        data=data,
     )
 
 
@@ -147,7 +151,7 @@ def send_response(args, response):
     if isinstance(response, dict) and response.get("photo"):
         send_photo(args, response["photo"], response.get("caption", ""))
     elif isinstance(response, dict):
-        send_message(args, response.get("text", "Sem resposta."))
+        send_message(args, response.get("text", "Sem resposta."), response.get("reply_markup"))
     else:
         send_message(args, str(response))
 
@@ -306,6 +310,29 @@ def payment_icon(name):
     if "CARTAO" in clean or "POS" in clean:
         return "💳"
     return "💰"
+
+
+def product_search_state_file(args, chat_id):
+    return Path(args.state_dir) / ("product_search_%s.json" % chat_id)
+
+
+def save_product_search(args, chat_id, term):
+    path = product_search_state_file(args, chat_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"term": term, "created": int(time.time())}), encoding="utf-8")
+
+
+def load_product_search(args, chat_id):
+    path = product_search_state_file(args, chat_id)
+    if not path.exists():
+        return ""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if time.time() - int(data.get("created", 0)) > 1800:
+            return ""
+        return str(data.get("term") or "")
+    except Exception:
+        return ""
 
 
 def parse_fields(body):
@@ -478,7 +505,19 @@ def cupom_detail(args, number):
     return "\n".join(lines)
 
 
-def search_items(args, term):
+def product_search_keyboard(page, pages):
+    buttons = []
+    nav = []
+    if page > 0:
+        nav.append({"text": "◀️ Anterior", "callback_data": "search:%d" % (page - 1)})
+    nav.append({"text": "%d/%d" % (page + 1, pages), "callback_data": "noop"})
+    if page < pages - 1:
+        nav.append({"text": "Próxima ▶️", "callback_data": "search:%d" % (page + 1)})
+    buttons.append(nav)
+    return {"inline_keyboard": buttons}
+
+
+def search_items(args, term, page=0):
     term_low = term.lower()
     cups, _, _ = read_sales(args)
     hits = []
@@ -491,7 +530,10 @@ def search_items(args, term):
             date_label(query_date(args)),
             term,
         )
-    shown = hits[-25:]
+    pages = max(1, (len(hits) + SEARCH_PAGE_SIZE - 1) // SEARCH_PAGE_SIZE)
+    page = max(0, min(int(page), pages - 1))
+    start = page * SEARCH_PAGE_SIZE
+    shown = hits[start:start + SEARCH_PAGE_SIZE]
     total_value = sum(item["value"] for _, item in hits)
     lines = [
         "🔎 Buscar produto",
@@ -499,6 +541,7 @@ def search_items(args, term):
         "📝 Produto: %s" % term,
         "📦 Ocorrencias: %d" % len(hits),
         "💰 Valor somado: %s" % money_br(total_value),
+        "📄 Pagina: %d/%d" % (page + 1, pages),
         "",
         "🧾 Resultados",
     ]
@@ -509,9 +552,10 @@ def search_items(args, term):
             "    %s x %s  •  %s" % (item["qty"], item.get("code") or "sem codigo", money_br(item["value"])),
             "",
         ])
-    if len(hits) > 25:
-        lines.append("Mostrando os ultimos 25 resultados.")
-    return "\n".join(lines)
+    return {
+        "text": "\n".join(lines).strip(),
+        "reply_markup": product_search_keyboard(page, pages),
+    }
 
 
 def parse_event_time(value):
@@ -972,6 +1016,20 @@ def handle_callback(args, callback):
         answer_callback(args, callback_id, text)
         send_message(args, text)
         return
+    if data.startswith("search:"):
+        term = load_product_search(args, chat_id)
+        if not term:
+            answer_callback(args, callback_id, "Busca expirada. Toque em Buscar produto novamente.")
+            return
+        page = int(data.split(":", 1)[1])
+        result = search_items(args, term, page)
+        if isinstance(result, dict):
+            edit_message(args, chat_id, message_id, result["text"], result.get("reply_markup"))
+            answer_callback(args, callback_id)
+        else:
+            edit_message(args, chat_id, message_id, result)
+            answer_callback(args, callback_id)
+        return
     answer_callback(args, callback_id)
 
 
@@ -1026,6 +1084,7 @@ def main():
                     elif not text.startswith("/"):
                         mode = pop_pending_mode(args, chat.get("id"))
                         if mode == "search":
+                            save_product_search(args, chat.get("id"), text)
                             answer = search_items(args, text)
                         elif mode == "date":
                             dt = parse_date_text(text)
@@ -1040,8 +1099,12 @@ def main():
                             else:
                                 answer = product_photo(args, parsed[0], parsed[1])
                         else:
+                            if normalized.startswith("/buscar ") or normalized.startswith("/produto "):
+                                save_product_search(args, chat.get("id"), normalized.split(maxsplit=1)[1])
                             answer = handle_command(args, text)
                     else:
+                        if normalized.startswith("/buscar ") or normalized.startswith("/produto "):
+                            save_product_search(args, chat.get("id"), normalized.split(maxsplit=1)[1])
                         answer = handle_command(args, text)
                 except Exception as exc:
                     answer = "Erro ao executar comando: %s %s" % (type(exc).__name__, exc)
