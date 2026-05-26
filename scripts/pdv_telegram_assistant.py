@@ -441,29 +441,41 @@ def cupom_detail(args, number):
     if not cup:
         return "Nao achei o cupom %s no Espiao de %s." % (number, date_label(query_date(args)))
 
+    total = cup.get("total") or cup.get("subtotal") or sum(item["value"] for item in cup["items"])
+    status_text = "Fechado" if cup.get("closed") else "Em aberto"
     lines = [
-        "Cupom %s" % cup["number"],
-        "Inicio: %s  Fechou: %s" % (cup.get("start") or "-", cup.get("closed") or "-"),
-        "Operador: %s" % (cup.get("operator") or "-"),
+        "🧾 Cupom %s" % cup["number"],
+        "📅 %s" % date_label(query_date(args)),
         "",
-        "Itens:",
+        "📌 Status: %s" % status_text,
+        "🕒 Inicio: %s" % (cup.get("start") or "-"),
+        "✅ Fechou: %s" % (cup.get("closed") or "-"),
+        "👤 Operador: %s" % (cup.get("operator") or "-"),
+        "💰 Total: %s" % money_br(total),
+        "",
+        "📦 Itens",
     ]
     for idx, item in enumerate(cup["items"], 1):
-        lines.append("%d. %s x %s - %s" % (idx, item["qty"], item["desc"], money_br(item["value"])))
+        lines.append(
+            "%02d. %s" % (idx, item["desc"].title())
+        )
+        lines.append(
+            "    %s x %s  •  %s" % (item["qty"], item.get("code") or "sem codigo", money_br(item["value"]))
+        )
     if not cup["items"]:
-        lines.append("- sem itens")
+        lines.append("    Nenhum item registrado")
     lines.append("")
-    lines.append("Pagamentos:")
+    lines.append("💳 Pagamentos")
     for payment in cup["payments"]:
-        lines.append("- %s: %s" % (payment["desc"], money_br(payment["value"])))
+        lines.append("%s %s: %s" % (
+            payment_icon(payment["desc"]),
+            payment["desc"].title(),
+            money_br(payment["value"]),
+        ))
     if not cup["payments"]:
-        lines.append("- sem pagamento")
-    if cup.get("closed"):
-        total = cup.get("total") or cup.get("subtotal") or sum(item["value"] for item in cup["items"])
-    else:
-        total = sum(item["value"] for item in cup["items"])
+        lines.append("    Nenhum pagamento registrado")
     lines.append("")
-    lines.append("Total: %s" % money_br(total))
+    lines.append("🏁 Total do cupom: %s" % money_br(total))
     return "\n".join(lines)
 
 
