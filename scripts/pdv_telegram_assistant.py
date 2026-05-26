@@ -368,7 +368,7 @@ def read_sales(args):
 
 
 def caixa_summary(args):
-    cups, _, path = read_sales(args)
+    cups, _, _ = read_sales(args)
     closed = [cup for cup in cups if cup.get("closed")]
     total = sum(cup.get("total") or cup.get("subtotal") or sum(item["value"] for item in cup["items"]) for cup in closed)
     payments = defaultdict(float)
@@ -379,19 +379,20 @@ def caixa_summary(args):
             payments[payment["desc"] or ("Cod %s" % payment["code"])] += payment["value"]
 
     lines = [
-        "PDV %s - Caixa %s" % (args.pdv_station, date_label(query_date(args))),
-        "Arquivo: %s" % path.name,
-        "Cupons fechados: %d" % len(closed),
-        "Itens registrados: %d" % item_count,
-        "Total fechado: %s" % money_br(total),
+        "💼 Caixa PDV %s" % args.pdv_station,
+        "📅 %s" % date_label(query_date(args)),
         "",
-        "Pagamentos:",
+        "🧾 Cupons fechados: %d" % len(closed),
+        "📦 Itens registrados: %d" % item_count,
+        "💰 Total vendido: %s" % money_br(total),
+        "",
+        "💳 Formas de pagamento",
     ]
     if payments:
         for name, value in sorted(payments.items()):
-            lines.append("- %s: %s" % (name, money_br(value)))
+            lines.append("• %s: %s" % (name.title(), money_br(value)))
     else:
-        lines.append("- sem pagamentos ainda")
+        lines.append("• Sem pagamentos registrados ainda")
     return "\n".join(lines)
 
 
