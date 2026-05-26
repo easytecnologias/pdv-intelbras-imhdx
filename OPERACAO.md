@@ -99,6 +99,20 @@ PDV no iMHDX, no horario do item, e extrair um quadro. Se o iMHDX nao responder
 ou nao gerar imagem, ele usa a foto local salva pelo auditor como fallback. A
 foto enviada no Telegram ja sai com a legenda do PDV sobreposta no print.
 
+## Instalacao online
+
+Em um PDV Linux novo ou em manutencao, use:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/easytecnologias/pdv-intelbras-imhdx/main/install.sh -o install.sh
+chmod +x install.sh
+sudo ./install.sh
+```
+
+O instalador cria backup automatico em `/var/backups/pdv-intelbras-imhdx`,
+instala os scripts em `/opt`, grava as configuracoes em `/etc` e ativa os tres
+servicos principais.
+
 ## Causa corrigida em 2026-05-24
 
 A ponte ficava presa no arquivo do dia anterior quando o arquivo antigo continuava existindo.

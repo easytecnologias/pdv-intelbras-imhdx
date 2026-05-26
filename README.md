@@ -92,3 +92,26 @@ foto do produto no cupom. Para foto, o bot tenta primeiro extrair o quadro da
 gravacao do canal do PDV no iMHDX, exatamente no horario do item; se nao
 conseguir, usa a evidencia local do auditor como fallback. A imagem enviada vai
 com a legenda do PDV escrita sobre o proprio print.
+
+## Instalador online
+
+No PDV Linux, rode como `root`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/easytecnologias/pdv-intelbras-imhdx/main/install.sh -o install.sh
+chmod +x install.sh
+sudo ./install.sh
+```
+
+O instalador pergunta os dados do PDV, iMHDX, camera, Telegram e ROI do scanner.
+Ele cria backup da instalacao anterior, copia os scripts para `/opt`, grava os
+arquivos `.env` em `/etc`, instala os servicos `systemd`, reinicia tudo e mostra
+o status final.
+
+Servicos criados:
+
+```text
+pdv-intelbras-bridge.service
+pdv-camera-auditor.service
+pdv-telegram-assistant.service
+```
