@@ -820,7 +820,7 @@ def handle_command(args, text):
         return product_photo(args, parsed[0], parsed[1])
     if cmd == "/suspeitas":
         return suspect_summary(args)
-    return "Comando nao reconhecido.\n\n%s" % help_text()
+    return ""
 
 
 def normalize_button_text(text):
@@ -997,7 +997,8 @@ def main():
                         answer = handle_command(args, text)
                 except Exception as exc:
                     answer = "Erro ao executar comando: %s %s" % (type(exc).__name__, exc)
-                send_response(args, answer)
+                if answer:
+                    send_response(args, answer)
         except Exception as exc:
             print("ASSISTENTE_ERRO", type(exc).__name__, exc, flush=True)
             time.sleep(5)
