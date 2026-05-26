@@ -157,7 +157,6 @@ def main_keyboard():
         "keyboard": [
             [{"text": "Status"}, {"text": "Data"}],
             [{"text": "Caixa"}, {"text": "Cupom"}],
-            [{"text": "Dinheiro"}, {"text": "Suspeitas"}],
             [{"text": "Ultimo cupom"}, {"text": "Buscar produto"}],
             [{"text": "Foto produto"}],
         ],
