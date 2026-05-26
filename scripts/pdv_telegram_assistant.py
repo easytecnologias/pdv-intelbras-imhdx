@@ -487,18 +487,30 @@ def search_items(args, term):
             if term_low in item["desc"].lower() or term_low in item["code"]:
                 hits.append((cup, item))
     if not hits:
-        return "Nao achei '%s' nos itens de %s." % (term, date_label(query_date(args)))
-    lines = ["Busca: %s" % term, "Data: %s" % date_label(query_date(args)), "Resultados: %d" % len(hits), ""]
-    for cup, item in hits[-25:]:
-        lines.append("Cupom %s %s - %s x %s - %s" % (
-            cup.get("number", "-"),
-            item["time"],
-            item["qty"],
-            item["desc"],
-            money_br(item["value"]),
-        ))
+        return "🔎 Produto nao encontrado\n\n📅 %s\n📝 Busca: %s" % (
+            date_label(query_date(args)),
+            term,
+        )
+    shown = hits[-25:]
+    total_value = sum(item["value"] for _, item in hits)
+    lines = [
+        "🔎 Buscar produto",
+        "📅 %s" % date_label(query_date(args)),
+        "📝 Produto: %s" % term,
+        "📦 Ocorrencias: %d" % len(hits),
+        "💰 Valor somado: %s" % money_br(total_value),
+        "",
+        "🧾 Resultados",
+    ]
+    for cup, item in shown:
+        lines.extend([
+            "Cupom %s  •  %s" % (cup.get("number", "-"), item["time"]),
+            "    %s" % item["desc"].title(),
+            "    %s x %s  •  %s" % (item["qty"], item.get("code") or "sem codigo", money_br(item["value"])),
+            "",
+        ])
     if len(hits) > 25:
-        lines.append("Mostrando os ultimos 25.")
+        lines.append("Mostrando os ultimos 25 resultados.")
     return "\n".join(lines)
 
 
