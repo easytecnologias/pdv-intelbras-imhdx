@@ -36,6 +36,7 @@ def parse_args():
     parser.add_argument("--imhdx-channel", type=int, default=int(os.environ.get("IMHDX_CHANNEL", "1")))
     parser.add_argument("--imhdx-window-before", type=int, default=int(os.environ.get("IMHDX_WINDOW_BEFORE", "2")))
     parser.add_argument("--imhdx-window-after", type=int, default=int(os.environ.get("IMHDX_WINDOW_AFTER", "8")))
+    parser.add_argument("--photo-frame-offset", type=int, default=int(os.environ.get("PHOTO_FRAME_OFFSET", "3")))
     parser.add_argument("--ffmpegthumbnailer", default=os.environ.get("FFMPEGTHUMBNAILER", "ffmpegthumbnailer"))
     parser.add_argument("--poll-timeout", type=int, default=25)
     args = parser.parse_args()
@@ -638,11 +639,15 @@ def item_datetime(args, item):
     return datetime.strptime(dt.strftime("%Y-%m-%d") + " " + item["time"], "%Y-%m-%d %H:%M:%S")
 
 
+def photo_target_datetime(args, item):
+    return item_datetime(args, item) + timedelta(seconds=args.photo_frame_offset)
+
+
 def find_photo_for_item(args, item, seconds=60):
     events_path = Path(args.events_file)
     if not events_path.exists():
         return None
-    item_dt = item_datetime(args, item)
+    item_dt = photo_target_datetime(args, item)
     best = None
     best_delta = None
     desc = item["desc"].lower()
@@ -751,8 +756,9 @@ def imhdx_photo_for_item(args, cupom, item):
         return None
 
     item_dt = item_datetime(args, item)
-    start = item_dt - timedelta(seconds=args.imhdx_window_before)
-    end = item_dt + timedelta(seconds=args.imhdx_window_after)
+    target_dt = photo_target_datetime(args, item)
+    start = target_dt - timedelta(seconds=args.imhdx_window_before)
+    end = target_dt + timedelta(seconds=args.imhdx_window_after)
     start_text = quote(start.strftime("%Y-%m-%d %H:%M:%S"))
     end_text = quote(end.strftime("%Y-%m-%d %H:%M:%S"))
     url = (
@@ -762,7 +768,7 @@ def imhdx_photo_for_item(args, cupom, item):
 
     out_dir = Path(args.state_dir) / "imhdx"
     out_dir.mkdir(parents=True, exist_ok=True)
-    stamp = item_dt.strftime("%Y%m%d_%H%M%S")
+    stamp = target_dt.strftime("%Y%m%d_%H%M%S")
     base = "%s_%s" % (stamp, re.sub(r"[^0-9A-Za-z_-]+", "_", item.get("code") or "item"))
     dav_path = out_dir / ("%s.dav" % base)
     jpg_path = out_dir / ("%s.jpg" % base)
@@ -802,7 +808,7 @@ def imhdx_photo_for_item(args, cupom, item):
             stamped_path = overlay_pdv_caption(args, jpg_path, cupom, item, source)
             return {
                 "imagem": stamped_path,
-                "hora": item_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                "hora": target_dt.strftime("%Y-%m-%d %H:%M:%S"),
                 "fonte": source,
             }
     except Exception:
