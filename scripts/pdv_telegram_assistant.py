@@ -845,12 +845,21 @@ def product_photo(args, cupom, term):
             ) % (cupom, item["time"], item["qty"], item["desc"], money_br(item["value"]))
         }
     caption = (
-        "Cupom %s\n%s - %s x %s\nValor: %s\nHora item: %s\nFonte: %s"
+        "📸 Foto do produto\n"
+        "📅 %s\n"
+        "🧾 Cupom: %s\n\n"
+        "📦 Produto: %s\n"
+        "🔢 Codigo: %s\n"
+        "⚖️ Quantidade: %s\n"
+        "💰 Valor: %s\n"
+        "🕒 Hora do item: %s\n\n"
+        "🎥 Fonte: %s"
         % (
+            date_label(query_date(args)),
             cupom,
-            item["code"],
+            item["desc"].title(),
+            item["code"] or "sem codigo",
             item["qty"],
-            item["desc"],
             money_br(item["value"]),
             item["time"],
             event.get("fonte", "auditor local"),
