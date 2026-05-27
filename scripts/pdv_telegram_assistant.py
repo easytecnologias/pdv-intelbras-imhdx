@@ -162,7 +162,7 @@ def main_keyboard():
             [{"text": "Status"}, {"text": "Data"}],
             [{"text": "Caixa"}, {"text": "Cupom"}],
             [{"text": "Ultimo cupom"}, {"text": "Buscar produto"}],
-            [{"text": "Foto produto"}],
+            [{"text": "Foto produto"}, {"text": "Produto mais vendido"}],
         ],
         "resize_keyboard": True,
         "one_time_keyboard": False,
@@ -289,6 +289,20 @@ def money(value):
 def money_br(value):
     text = "{:,.2f}".format(value)
     return "R$ " + text.replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def qty_number(value):
+    try:
+        return float(str(value or "0").strip().replace(",", "."))
+    except Exception:
+        return 0.0
+
+
+def qty_br(value):
+    if abs(value - int(value)) < 0.0001:
+        return str(int(value))
+    text = "{:,.3f}".format(value).rstrip("0").rstrip(".")
+    return text.replace(",", "X").replace(".", ",").replace("X", ".")
 
 
 def normalize_text(value):
@@ -556,6 +570,63 @@ def search_items(args, term, page=0):
         "text": "\n".join(lines).strip(),
         "reply_markup": product_search_keyboard(page, pages),
     }
+
+
+def top_products(args, limit=10):
+    cups, _, _ = read_sales(args)
+    products = {}
+    for cup in cups:
+        seen_in_cup = set()
+        for item in cup["items"]:
+            code = item.get("code") or "sem codigo"
+            desc = item.get("desc") or "Produto sem descricao"
+            key = (code, normalize_text(desc))
+            if key not in products:
+                products[key] = {
+                    "code": code,
+                    "desc": desc,
+                    "qty": 0.0,
+                    "value": 0.0,
+                    "coupons": 0,
+                }
+            products[key]["qty"] += qty_number(item.get("qty"))
+            products[key]["value"] += item.get("value", 0.0)
+            if key not in seen_in_cup:
+                products[key]["coupons"] += 1
+                seen_in_cup.add(key)
+
+    if not products:
+        return "📦 Produto mais vendido\n\n📅 %s\nAinda nao achei itens vendidos nessa data." % date_label(query_date(args))
+
+    ranking = sorted(
+        products.values(),
+        key=lambda row: (row["qty"], row["value"]),
+        reverse=True,
+    )[:limit]
+    leader = ranking[0]
+    lines = [
+        "🏆 Produto mais vendido",
+        "📅 %s" % date_label(query_date(args)),
+        "",
+        "🥇 %s" % leader["desc"].title(),
+        "🔢 Codigo: %s" % leader["code"],
+        "📦 Quantidade: %s" % qty_br(leader["qty"]),
+        "💰 Valor vendido: %s" % money_br(leader["value"]),
+        "🧾 Cupons: %d" % leader["coupons"],
+        "",
+        "📊 Top %d produtos" % len(ranking),
+    ]
+    for idx, item in enumerate(ranking, 1):
+        medal = "🥇" if idx == 1 else "🥈" if idx == 2 else "🥉" if idx == 3 else "%02d." % idx
+        lines.extend([
+            "%s %s" % (medal, item["desc"].title()),
+            "    📦 %s  •  💰 %s  •  🧾 %d cupons" % (
+                qty_br(item["qty"]),
+                money_br(item["value"]),
+                item["coupons"],
+            ),
+        ])
+    return "\n".join(lines)
 
 
 def parse_event_time(value):
@@ -903,6 +974,8 @@ def handle_command(args, text):
         return caixa_summary(args)
     if cmd == "/dinheiro":
         return dinheiro_summary(args)
+    if cmd in ("/maisvendido", "/maisvendidos", "/topprodutos"):
+        return top_products(args)
     if cmd in ("/ultimo", "/ultimocupom"):
         return latest_coupon(args)
     if cmd == "/cupom":
@@ -934,6 +1007,7 @@ def normalize_button_text(text):
         "ultimo cupom": "/ultimo",
         "buscar produto": "/buscar",
         "foto produto": "/foto",
+        "produto mais vendido": "/maisvendido",
     }
     return mapping.get(clean.lower(), clean)
 
