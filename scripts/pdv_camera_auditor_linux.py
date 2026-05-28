@@ -15,6 +15,7 @@ from requests.auth import HTTPDigestAuth
 
 
 SPY_RE = re.compile(r"^(?P<time>\d{2}:\d{2}:\d{2}):(?P<text>.+)$")
+REFUND_RE = re.compile(r"\b(cancel|cancela|cancelamento|estorno|devolucao|devolu..o)\b", re.IGNORECASE)
 
 
 def parse_args():
@@ -40,10 +41,15 @@ def parse_args():
     parser.add_argument("--suspect-min-duration", type=float, default=float(os.environ.get("AUDITOR_SUSPECT_MIN_DURATION", "3.0")))
     parser.add_argument("--skin-ignore-ratio", type=float, default=float(os.environ.get("AUDITOR_SKIN_IGNORE_RATIO", "0.12")))
     parser.add_argument("--consultation-window", type=float, default=float(os.environ.get("AUDITOR_CONSULTATION_WINDOW", "45.0")))
+    parser.add_argument("--consultation-suspect-delay", type=float, default=float(os.environ.get("AUDITOR_CONSULTATION_SUSPECT_DELAY", "45.0")))
     parser.add_argument("--cluster-gap", type=float, default=float(os.environ.get("AUDITOR_CLUSTER_GAP", "3.0")))
     parser.add_argument("--max-cluster", type=float, default=float(os.environ.get("AUDITOR_MAX_CLUSTER", "7.0")))
     parser.add_argument("--post-item-ignore", type=float, default=float(os.environ.get("AUDITOR_POST_ITEM_IGNORE", "8.0")))
     parser.add_argument("--post-payment-ignore", type=float, default=float(os.environ.get("AUDITOR_POST_PAYMENT_IGNORE", "12.0")))
+    parser.add_argument("--open-coupon-base-timeout", type=float, default=float(os.environ.get("AUDITOR_OPEN_COUPON_BASE_TIMEOUT", "60.0")))
+    parser.add_argument("--open-coupon-item-seconds", type=float, default=float(os.environ.get("AUDITOR_OPEN_COUPON_ITEM_SECONDS", "8.0")))
+    parser.add_argument("--open-coupon-max-timeout", type=float, default=float(os.environ.get("AUDITOR_OPEN_COUPON_MAX_TIMEOUT", "360.0")))
+    parser.add_argument("--open-coupon-idle-timeout", type=float, default=float(os.environ.get("AUDITOR_OPEN_COUPON_IDLE_TIMEOUT", "60.0")))
     parser.add_argument("--telegram-token", default=os.environ.get("TELEGRAM_BOT_TOKEN", ""))
     parser.add_argument("--telegram-chat-id", default=os.environ.get("TELEGRAM_CHAT_ID", ""))
     parser.add_argument("--telegram-send-types", default=os.environ.get("TELEGRAM_SEND_TYPES", "suspeita"))
@@ -70,9 +76,15 @@ def spy_event_kind(text):
         return "item"
     if text.startswith("ABRECUPOM |"):
         return "start"
+    if text.startswith("FIN |") and is_refund_text(text):
+        return "refund"
     if text.startswith("FECHACUPOM |") or text.startswith("FIN |"):
         return "payment"
     return ""
+
+
+def is_refund_text(text):
+    return bool(REFUND_RE.search(text))
 
 
 def normalize_spy_text(kind, text):
@@ -90,6 +102,16 @@ def normalize_spy_text(kind, text):
         return "ABRECUPOM"
     if kind == "payment":
         return "FECHACUPOM"
+    if kind == "refund":
+        parts = ["CANCELAMENTO_ESTORNO"]
+        for name in ("Cod", "Descricao"):
+            value = field_value(text, name)
+            if value:
+                parts.append(value)
+        value = field_value(text, "VlTotal") or field_value(text, "VlUnit")
+        if value:
+            parts.append("R$ %s" % value)
+        return " | ".join(parts)
     return text
 
 
@@ -100,6 +122,8 @@ def event_kind(text):
         return "start"
     if text == "FECHACUPOM":
         return "payment"
+    if text.startswith("CANCELAMENTO_ESTORNO"):
+        return "refund"
     return "item"
 
 
@@ -172,6 +196,14 @@ def save_evidence(image, roi, path):
     image.save(str(path), "JPEG", quality=88)
 
 
+def save_current_evidence(args, roi, evidences, prefix):
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    image_path = evidences / ("%s_%s.jpg" % (prefix, stamp))
+    image = Image.open(BytesIO(snapshot(args))).convert("RGB")
+    save_evidence(image, roi, image_path)
+    return image_path
+
+
 def items_near(events, start, end, before_seconds, after_seconds):
     before = start - timedelta(seconds=before_seconds)
     after = end + timedelta(seconds=after_seconds)
@@ -231,6 +263,10 @@ def main():
     events = []
     seen = set()
     cupom_open = None
+    cupom_open_at = None
+    cupom_last_activity_at = None
+    cupom_item_count = 0
+    cupom_open_alerted = False
     suspect_ignore_until = datetime.min
     start = datetime.now()
     last_spy = start - timedelta(seconds=20)
@@ -253,14 +289,108 @@ def main():
                     seen.add(key)
                     events.append(key)
                     kind = event_kind(text)
-                    if kind in {"start", "item", "consultation"}:
+                    if kind == "start":
                         cupom_open = True
-                    elif kind == "payment":
+                        cupom_open_at = ts
+                        cupom_last_activity_at = ts
+                        cupom_item_count = 0
+                        cupom_open_alerted = False
+                    elif kind in {"item", "consultation"}:
+                        cupom_open = True
+                        cupom_last_activity_at = ts
+                        if kind == "item":
+                            cupom_item_count += 1
+                    elif kind in {"payment", "refund"}:
                         cupom_open = False
+                        cupom_open_at = None
+                        cupom_last_activity_at = None
+                        cupom_item_count = 0
+                        cupom_open_alerted = False
                     print(kind.upper(), ts.strftime("%H:%M:%S"), text, flush=True)
+                    if kind == "refund":
+                        image_path = ""
+                        try:
+                            image_path = str(save_current_evidence(args, roi, evidences, "pdv%s_cancelamento" % args.pdv_station))
+                        except Exception as exc:
+                            print("CANCELAMENTO_FOTO_ERRO", type(exc).__name__, exc, flush=True)
+                        payload = {
+                            "hora": ts.strftime("%Y-%m-%d %H:%M:%S"),
+                            "fim": ts.strftime("%Y-%m-%d %H:%M:%S"),
+                            "pdv": args.pdv_station,
+                            "tipo": "suspeita",
+                            "subtipo": "cancelamento_estorno",
+                            "score": 0,
+                            "skin": 0,
+                            "movimentos": 0,
+                            "motivo": text,
+                            "imagem": image_path,
+                        }
+                        write_event(events_file, payload)
+                        print("CANCELAMENTO_ESTORNO", ts.strftime("%H:%M:%S"), text, image_path, flush=True)
+                        if image_path and should_send_telegram(args, "suspeita"):
+                            caption = (
+                                "PDV %s - SUSPEITA\nHora: %s\nMotivo: cancelamento/estorno\n%s"
+                                % (args.pdv_station, payload["hora"], text)
+                            )
+                            try:
+                                send_telegram_photo(args, image_path, caption)
+                                print("TELEGRAM_ENVIADO", "cancelamento_estorno", image_path, flush=True)
+                            except Exception as exc:
+                                print("TELEGRAM_ERRO", type(exc).__name__, exc, flush=True)
                 last_spy = now
             except Exception as exc:
                 print("ESPIAO_ERRO", type(exc).__name__, exc, flush=True)
+
+        if (
+            cupom_open
+            and cupom_open_at
+            and cupom_last_activity_at
+            and not cupom_open_alerted
+            and (now - cupom_open_at).total_seconds()
+            >= min(
+                args.open_coupon_max_timeout,
+                args.open_coupon_base_timeout + (cupom_item_count * args.open_coupon_item_seconds),
+            )
+            and (now - cupom_last_activity_at).total_seconds() >= args.open_coupon_idle_timeout
+        ):
+            image_path = ""
+            try:
+                image_path = str(save_current_evidence(args, roi, evidences, "pdv%s_cupom_aberto" % args.pdv_station))
+            except Exception as exc:
+                print("CUPOM_ABERTO_FOTO_ERRO", type(exc).__name__, exc, flush=True)
+            reason = (
+                "cupom aberto ha %.0f segundos sem fechamento; parado ha %.0f segundos; itens=%d"
+                % (
+                    (now - cupom_open_at).total_seconds(),
+                    (now - cupom_last_activity_at).total_seconds(),
+                    cupom_item_count,
+                )
+            )
+            payload = {
+                "hora": cupom_open_at.strftime("%Y-%m-%d %H:%M:%S"),
+                "fim": now.strftime("%Y-%m-%d %H:%M:%S"),
+                "pdv": args.pdv_station,
+                "tipo": "suspeita",
+                "subtipo": "cupom_aberto_tempo_demais",
+                "score": 0,
+                "skin": 0,
+                "movimentos": 0,
+                "motivo": reason,
+                "imagem": image_path,
+            }
+            write_event(events_file, payload)
+            cupom_open_alerted = True
+            print("CUPOM_ABERTO_TEMPO_DEMAIS", payload["hora"], reason, image_path, flush=True)
+            if image_path and should_send_telegram(args, "suspeita"):
+                caption = (
+                    "PDV %s - SUSPEITA\nHora: %s\nFim: %s\nMotivo: %s"
+                    % (args.pdv_station, payload["hora"], payload["fim"], reason)
+                )
+                try:
+                    send_telegram_photo(args, image_path, caption)
+                    print("TELEGRAM_ENVIADO", "cupom_aberto_tempo_demais", image_path, flush=True)
+                except Exception as exc:
+                    print("TELEGRAM_ERRO", type(exc).__name__, exc, flush=True)
 
         try:
             jpeg = snapshot(args)
@@ -326,41 +456,64 @@ def main():
             )
             consult = typed_near(events, cluster["start"], cluster["last"], args.consultation_window, "consultation")
             activity = activity_near(events, cluster["start"], cluster["last"], args.consultation_window)
+            consult_ready = consult and (now - consult[-1][0]).total_seconds() >= args.consultation_suspect_delay
             if near:
                 pending.popleft()
                 status = "casou"
+                subtype = ""
                 reason = near[-1][1].replace('"', "'")
                 ignore_until = now + timedelta(seconds=args.post_item_ignore)
                 print("CASOU", cluster["start"].strftime("%H:%M:%S"), "item=", reason, flush=True)
             elif paid:
                 pending.popleft()
                 status = "ignorado"
+                subtype = ""
                 reason = "movimento durante pagamento/finalizacao"
                 ignore_until = now + timedelta(seconds=args.post_payment_ignore)
                 print("IGNORADO", cluster["start"].strftime("%H:%M:%S"), reason, flush=True)
-            elif consult and (now - consult[-1][0]).total_seconds() < args.consultation_window:
+            elif consult and not consult_ready:
                 print("AGUARDANDO_CONSULTA", cluster["start"].strftime("%H:%M:%S"), consult[-1][1], flush=True)
                 break
             elif cluster_age < args.pending_suspect_delay:
                 break
             elif consult:
                 pending.popleft()
-                status = "consulta"
-                reason = "movimento durante consulta sem venda no prazo: %s" % consult[-1][1]
-                print("CONSULTA_SEM_VENDA", cluster["start"].strftime("%H:%M:%S"), reason, flush=True)
+                if (
+                    cluster["score"] < args.suspect_min_score
+                    or cluster["count"] < args.suspect_min_moves
+                    or (cluster["last"] - cluster["start"]).total_seconds() < args.suspect_min_duration
+                ):
+                    status = "ignorado"
+                    subtype = ""
+                    reason = "consulta com movimento fraco/curto sem venda"
+                    print("IGNORADO", cluster["start"].strftime("%H:%M:%S"), reason, flush=True)
+                elif cluster.get("skin", 0.0) >= args.skin_ignore_ratio:
+                    status = "ignorado"
+                    subtype = ""
+                    reason = "consulta com mao/braco no scanner"
+                    print("IGNORADO", cluster["start"].strftime("%H:%M:%S"), reason, flush=True)
+                else:
+                    status = "suspeita"
+                    subtype = "consulta_sem_venda"
+                    reason = "CSP com movimento e sem VIT no prazo: %s" % consult[-1][1]
+                    suspect_ignore_until = now + timedelta(seconds=args.suspect_cooldown)
+                    print("CONSULTA_SEM_VENDA", cluster["start"].strftime("%H:%M:%S"), reason, cluster["image"], flush=True)
             elif cluster["start"] < ignore_until:
                 pending.popleft()
                 status = "ignorado"
+                subtype = ""
                 reason = "movimento apos item casado"
                 print("IGNORADO", cluster["start"].strftime("%H:%M:%S"), reason, flush=True)
             elif cupom_open is False and not activity:
                 pending.popleft()
                 status = "ignorado"
+                subtype = ""
                 reason = "movimento fora de cupom aberto"
                 print("IGNORADO", cluster["start"].strftime("%H:%M:%S"), reason, flush=True)
             elif now < suspect_ignore_until:
                 pending.popleft()
                 status = "ignorado"
+                subtype = ""
                 reason = "movimento dentro do cooldown de suspeita"
                 print("IGNORADO", cluster["start"].strftime("%H:%M:%S"), reason, flush=True)
             elif (
@@ -370,16 +523,19 @@ def main():
             ):
                 pending.popleft()
                 status = "ignorado"
+                subtype = ""
                 reason = "movimento fraco/curto sem item"
                 print("IGNORADO", cluster["start"].strftime("%H:%M:%S"), reason, flush=True)
             elif cluster.get("skin", 0.0) >= args.skin_ignore_ratio:
                 pending.popleft()
                 status = "ignorado"
+                subtype = ""
                 reason = "movimento com mao/braco no scanner"
                 print("IGNORADO", cluster["start"].strftime("%H:%M:%S"), reason, flush=True)
             else:
                 pending.popleft()
                 status = "suspeita"
+                subtype = "movimento_sem_item"
                 reason = "movimento sem item registrado"
                 suspect_ignore_until = now + timedelta(seconds=args.suspect_cooldown)
                 print("SUSPEITA", cluster["start"].strftime("%H:%M:%S"), reason, cluster["image"], flush=True)
@@ -389,6 +545,7 @@ def main():
                 "fim": cluster["last"].strftime("%Y-%m-%d %H:%M:%S"),
                 "pdv": args.pdv_station,
                 "tipo": status,
+                "subtipo": subtype,
                 "score": round(cluster["score"], 2),
                 "skin": round(cluster.get("skin", 0.0), 3),
                 "movimentos": cluster["count"],
