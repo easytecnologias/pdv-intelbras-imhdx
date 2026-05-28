@@ -35,6 +35,7 @@ def parse_args():
     parser.add_argument("--virtual-line-band", type=int, default=int(os.environ.get("AUDITOR_VIRTUAL_LINE_BAND", "14")))
     parser.add_argument("--virtual-line-window", type=float, default=float(os.environ.get("AUDITOR_VIRTUAL_LINE_WINDOW", "5.0")))
     parser.add_argument("--virtual-line-cooldown", type=float, default=float(os.environ.get("AUDITOR_VIRTUAL_LINE_COOLDOWN", "0.8")))
+    parser.add_argument("--virtual-scanner-pulse-cooldown", type=float, default=float(os.environ.get("AUDITOR_VIRTUAL_SCANNER_PULSE_COOLDOWN", "0.35")))
     parser.add_argument("--window", type=float, default=float(os.environ.get("AUDITOR_WINDOW", "5.0")))
     parser.add_argument("--item-before-window", type=float, default=float(os.environ.get("AUDITOR_ITEM_BEFORE", "20.0")))
     parser.add_argument("--item-after-window", type=float, default=float(os.environ.get("AUDITOR_ITEM_AFTER", "35.0")))
@@ -264,6 +265,22 @@ def items_near(events, start, end, before_seconds, after_seconds):
     return [(ts, text) for ts, text in events if before <= ts <= after and event_kind(text) == "item"]
 
 
+def item_visual_quantity(text):
+    unit = field_value(text, "Und").strip().upper()
+    raw_qty = field_value(text, "Quant").replace(",", ".")
+    try:
+        qty = float(raw_qty)
+    except ValueError:
+        qty = 1.0
+    if unit in {"KG", "KILO", "KILOS"}:
+        return 1
+    return max(1, int(round(qty)))
+
+
+def items_visual_quantity(items):
+    return sum(item_visual_quantity(text) for _, text in items)
+
+
 def typed_near(events, start, end, seconds, kind):
     before = start - timedelta(seconds=seconds)
     after = end + timedelta(seconds=seconds)
@@ -312,7 +329,7 @@ def main():
 
     previous = None
     previous_lines = {}
-    virtual_path = []
+    virtual_flow = None
     last_line_hit = {}
     last_motion = datetime.min
     ignore_until = datetime.min
@@ -456,40 +473,50 @@ def main():
             image, current, skin = motion_image(jpeg, roi)
             current_lines = {line["name"]: line_motion_data(image, line, args.virtual_line_band) for line in virtual_lines}
             for name, line_score in virtual_line_hits(previous_lines, current_lines, args.virtual_line_threshold):
-                if (now - last_line_hit.get(name, datetime.min)).total_seconds() < args.virtual_line_cooldown:
+                cooldown = args.virtual_scanner_pulse_cooldown if name == "scanner" else args.virtual_line_cooldown
+                if (now - last_line_hit.get(name, datetime.min)).total_seconds() < cooldown:
                     continue
                 last_line_hit[name] = now
-                virtual_path.append((name, now, line_score))
-                cutoff = now - timedelta(seconds=args.virtual_line_window)
-                virtual_path = [(line_name, ts, score_value) for line_name, ts, score_value in virtual_path if ts >= cutoff]
                 print("LINHA_VIRTUAL", name, now.strftime("%H:%M:%S"), "score=", round(line_score, 2), flush=True)
 
-                names = [line_name for line_name, _, _ in virtual_path]
-                if all(item in names for item in ("entrada", "scanner", "saida")):
-                    entrada_idx = names.index("entrada")
-                    scanner_idx = names.index("scanner") if "scanner" in names[entrada_idx + 1 :] else -1
-                    if scanner_idx >= 0:
-                        scanner_idx = entrada_idx + 1 + names[entrada_idx + 1 :].index("scanner")
-                    saida_idx = names.index("saida") if scanner_idx >= 0 and "saida" in names[scanner_idx + 1 :] else -1
-                    if saida_idx >= 0:
-                        saida_idx = scanner_idx + 1 + names[scanner_idx + 1 :].index("saida")
-                        sequence = virtual_path[entrada_idx : saida_idx + 1]
-                        stamp = now.strftime("%Y%m%d_%H%M%S")
-                        image_path = evidences / ("pdv%s_linhas_virtuais_%s.jpg" % (args.pdv_station, stamp))
-                        save_virtual_line_evidence(image.copy(), virtual_lines, image_path)
-                        pending.append(
-                            {
-                                "start": sequence[0][1],
-                                "last": sequence[-1][1],
-                                "score": max(score_value for _, _, score_value in sequence),
-                                "skin": skin,
-                                "count": len(sequence),
-                                "image": image_path,
-                                "source": "linhas_virtuais",
-                            }
-                        )
-                        print("PASSAGEM_ITEM_VISUAL", sequence[0][1].strftime("%H:%M:%S"), image_path, flush=True)
-                        virtual_path = []
+                if virtual_flow and (now - virtual_flow["start"]).total_seconds() > args.virtual_line_window:
+                    virtual_flow = None
+                if name == "entrada":
+                    virtual_flow = {
+                        "start": now,
+                        "last": now,
+                        "scanner_pulses": 0,
+                        "score": line_score,
+                    }
+                elif name == "scanner" and virtual_flow:
+                    virtual_flow["last"] = now
+                    virtual_flow["scanner_pulses"] += 1
+                    virtual_flow["score"] = max(virtual_flow["score"], line_score)
+                elif name == "saida" and virtual_flow and virtual_flow["scanner_pulses"] > 0:
+                    stamp = now.strftime("%Y%m%d_%H%M%S")
+                    image_path = evidences / ("pdv%s_linhas_virtuais_%s.jpg" % (args.pdv_station, stamp))
+                    save_virtual_line_evidence(image.copy(), virtual_lines, image_path)
+                    pending.append(
+                        {
+                            "start": virtual_flow["start"],
+                            "last": now,
+                            "score": max(virtual_flow["score"], line_score),
+                            "skin": skin,
+                            "count": virtual_flow["scanner_pulses"],
+                            "visual_count": virtual_flow["scanner_pulses"],
+                            "image": image_path,
+                            "source": "linhas_virtuais",
+                        }
+                    )
+                    print(
+                        "PASSAGEM_ITEM_VISUAL",
+                        virtual_flow["start"].strftime("%H:%M:%S"),
+                        "qtd_visual=",
+                        virtual_flow["scanner_pulses"],
+                        image_path,
+                        flush=True,
+                    )
+                    virtual_flow = None
 
             score = motion_score(previous, current)
             if score > args.threshold and now >= ignore_until and (now - last_motion).total_seconds() > 1:
@@ -545,23 +572,40 @@ def main():
             if cluster_age < args.match_delay:
                 break
             paid = typed_near(events, cluster["start"], cluster["last"], args.window, "payment")
+            item_before = args.window if visual_item else args.item_before_window
+            item_after = args.window if visual_item else args.item_after_window
             near = items_near(
                 events,
                 cluster["start"],
                 cluster["last"],
-                args.item_before_window,
-                args.item_after_window,
+                item_before,
+                item_after,
             )
             consult = typed_near(events, cluster["start"], cluster["last"], args.consultation_window, "consultation")
             activity = activity_near(events, cluster["start"], cluster["last"], args.consultation_window)
             consult_ready = consult and (now - consult[-1][0]).total_seconds() >= args.consultation_suspect_delay
             if near:
                 pending.popleft()
-                status = "casou"
-                subtype = ""
-                reason = near[-1][1].replace('"', "'")
-                ignore_until = now + timedelta(seconds=args.post_item_ignore)
-                print("CASOU", cluster["start"].strftime("%H:%M:%S"), "item=", reason, flush=True)
+                pdv_count = items_visual_quantity(near)
+                visual_count = int(cluster.get("visual_count", 1))
+                if visual_item and visual_count > pdv_count:
+                    status = "suspeita"
+                    subtype = "quantidade_visual_maior"
+                    reason = "qtd visual %d maior que qtd PDV %d: %s" % (
+                        visual_count,
+                        pdv_count,
+                        near[-1][1].replace('"', "'"),
+                    )
+                    suspect_ignore_until = now + timedelta(seconds=args.suspect_cooldown)
+                    print("SUSPEITA_QTD", cluster["start"].strftime("%H:%M:%S"), reason, flush=True)
+                else:
+                    status = "casou"
+                    subtype = ""
+                    reason = near[-1][1].replace('"', "'")
+                    if visual_item:
+                        reason = "qtd visual %d / qtd PDV %d: %s" % (visual_count, pdv_count, reason)
+                    ignore_until = now + timedelta(seconds=args.post_item_ignore)
+                    print("CASOU", cluster["start"].strftime("%H:%M:%S"), "item=", reason, flush=True)
             elif paid:
                 pending.popleft()
                 status = "ignorado"
@@ -654,6 +698,8 @@ def main():
                 "skin": round(cluster.get("skin", 0.0), 3),
                 "movimentos": cluster["count"],
                 "origem": cluster.get("source", "roi"),
+                "quantidade_visual": int(cluster.get("visual_count", 1)) if visual_item else 0,
+                "quantidade_pdv": items_visual_quantity(near) if visual_item else 0,
                 "motivo": reason,
                 "imagem": str(cluster["image"]),
             }
