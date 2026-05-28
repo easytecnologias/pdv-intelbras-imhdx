@@ -277,6 +277,14 @@ def item_visual_quantity(text):
     return max(1, int(round(qty)))
 
 
+def item_is_weighted(text):
+    return field_value(text, "Und").strip().upper() in {"KG", "KILO", "KILOS"}
+
+
+def items_have_weighted(items):
+    return any(item_is_weighted(text) for _, text in items)
+
+
 def items_visual_quantity(items):
     return sum(item_visual_quantity(text) for _, text in items)
 
@@ -296,6 +304,68 @@ def activity_near(events, start, end, seconds):
 def should_send_telegram(args, status):
     allowed = {item.strip().lower() for item in args.telegram_send_types.split(",") if item.strip()}
     return status.lower() in allowed or "todos" in allowed or "all" in allowed
+
+
+def alert_title(payload):
+    subtype = payload.get("subtipo") or payload.get("tipo") or "suspeita"
+    labels = {
+        "quantidade_visual_maior": "Quantidade visual maior que o PDV",
+        "linhas_virtuais_sem_item": "Passagem visual sem item",
+        "consulta_sem_venda": "Consulta sem venda",
+        "movimento_sem_item": "Movimento sem item",
+        "cancelamento_estorno": "Cancelamento/estorno",
+        "cupom_aberto_tempo_demais": "Cupom aberto tempo demais",
+    }
+    return labels.get(subtype, subtype.replace("_", " ").title())
+
+
+def compact_item_text(text):
+    if "VIT |" in text:
+        text = text[text.find("VIT |") :]
+    code = field_value(text, "Cod")
+    desc = field_value(text, "Descricao")
+    qty = field_value(text, "Quant")
+    unit = field_value(text, "Und")
+    total = field_value(text, "VlTotal") or field_value(text, "VlUnit")
+    parts = []
+    if desc:
+        parts.append(desc)
+    if code:
+        parts.append("Cod: %s" % code)
+    if qty:
+        parts.append("Qtd: %s%s" % (qty, " %s" % unit if unit else ""))
+    if total:
+        parts.append("Valor: R$ %s" % total)
+    return "\n".join(parts) if parts else text[:220]
+
+
+def telegram_caption(payload):
+    lines = [
+        "🚨 ALERTA ANTIFRAUDE",
+        "🏪 PDV: %s" % payload.get("pdv", ""),
+        "⚠️ Tipo: %s" % alert_title(payload),
+        "🕒 Início: %s" % payload.get("hora", ""),
+    ]
+    if payload.get("fim") and payload.get("fim") != payload.get("hora"):
+        lines.append("🏁 Fim: %s" % payload.get("fim"))
+    if payload.get("origem"):
+        lines.append("🎥 Origem: %s" % payload.get("origem"))
+    if payload.get("quantidade_visual"):
+        lines.append("👁️ Quantidade visual: %s" % payload.get("quantidade_visual"))
+    if payload.get("quantidade_pdv"):
+        lines.append("🧾 Quantidade no PDV: %s" % payload.get("quantidade_pdv"))
+    if payload.get("score"):
+        lines.append("📊 Score: %s" % payload.get("score"))
+    if payload.get("movimentos"):
+        lines.append("🔁 Movimentos: %s" % payload.get("movimentos"))
+    reason = str(payload.get("motivo") or "")
+    if "VIT |" in reason:
+        lines.append("🛒 Item no PDV:")
+        lines.append(compact_item_text(reason))
+    elif reason:
+        lines.append("📌 Motivo: %s" % reason[:260])
+    lines.append("✅ Ação: conferir cupom e vídeo.")
+    return "\n".join(lines)[:1024]
 
 
 def send_telegram_photo(args, image_path, caption):
@@ -404,12 +474,8 @@ def main():
                         write_event(events_file, payload)
                         print("CANCELAMENTO_ESTORNO", ts.strftime("%H:%M:%S"), text, image_path, flush=True)
                         if image_path and should_send_telegram(args, "suspeita"):
-                            caption = (
-                                "PDV %s - SUSPEITA\nHora: %s\nMotivo: cancelamento/estorno\n%s"
-                                % (args.pdv_station, payload["hora"], text)
-                            )
                             try:
-                                send_telegram_photo(args, image_path, caption)
+                                send_telegram_photo(args, image_path, telegram_caption(payload))
                                 print("TELEGRAM_ENVIADO", "cancelamento_estorno", image_path, flush=True)
                             except Exception as exc:
                                 print("TELEGRAM_ERRO", type(exc).__name__, exc, flush=True)
@@ -458,12 +524,8 @@ def main():
             cupom_open_alerted = True
             print("CUPOM_ABERTO_TEMPO_DEMAIS", payload["hora"], reason, image_path, flush=True)
             if image_path and should_send_telegram(args, "suspeita"):
-                caption = (
-                    "PDV %s - SUSPEITA\nHora: %s\nFim: %s\nMotivo: %s"
-                    % (args.pdv_station, payload["hora"], payload["fim"], reason)
-                )
                 try:
-                    send_telegram_photo(args, image_path, caption)
+                    send_telegram_photo(args, image_path, telegram_caption(payload))
                     print("TELEGRAM_ENVIADO", "cupom_aberto_tempo_demais", image_path, flush=True)
                 except Exception as exc:
                     print("TELEGRAM_ERRO", type(exc).__name__, exc, flush=True)
@@ -588,7 +650,29 @@ def main():
                 pending.popleft()
                 pdv_count = items_visual_quantity(near)
                 visual_count = int(cluster.get("visual_count", 1))
-                if visual_item and visual_count > pdv_count:
+                visual_skin = visual_item and cluster.get("skin", 0.0) >= args.skin_ignore_ratio
+                has_weighted_item = visual_item and items_have_weighted(near)
+                if visual_item and visual_count > pdv_count and visual_skin:
+                    status = "casou"
+                    subtype = ""
+                    reason = "qtd visual %d / qtd PDV %d com mao/braco detectado; sem fraude automatica: %s" % (
+                        visual_count,
+                        pdv_count,
+                        near[-1][1].replace('"', "'"),
+                    )
+                    ignore_until = now + timedelta(seconds=args.post_item_ignore)
+                    print("CASOU", cluster["start"].strftime("%H:%M:%S"), "item=", reason, flush=True)
+                elif visual_item and visual_count > pdv_count and has_weighted_item:
+                    status = "casou"
+                    subtype = ""
+                    reason = "item pesado/KG; qtd visual %d nao comparada com qtd PDV %d: %s" % (
+                        visual_count,
+                        pdv_count,
+                        near[-1][1].replace('"', "'"),
+                    )
+                    ignore_until = now + timedelta(seconds=args.post_item_ignore)
+                    print("CASOU", cluster["start"].strftime("%H:%M:%S"), "item=", reason, flush=True)
+                elif visual_item and visual_count > pdv_count:
                     status = "suspeita"
                     subtype = "quantidade_visual_maior"
                     reason = "qtd visual %d maior que qtd PDV %d: %s" % (
@@ -680,6 +764,12 @@ def main():
                 subtype = ""
                 reason = "movimento com mao/braco no scanner"
                 print("IGNORADO", cluster["start"].strftime("%H:%M:%S"), reason, flush=True)
+            elif visual_item and cluster.get("skin", 0.0) >= args.skin_ignore_ratio:
+                pending.popleft()
+                status = "ignorado"
+                subtype = ""
+                reason = "passagem nas linhas com mao/braco; sem item PDV correspondente"
+                print("IGNORADO", cluster["start"].strftime("%H:%M:%S"), reason, flush=True)
             else:
                 pending.popleft()
                 status = "suspeita"
@@ -705,20 +795,8 @@ def main():
             }
             write_event(events_file, payload)
             if should_send_telegram(args, status):
-                caption = (
-                    "PDV %s - %s\nHora: %s\nFim: %s\nMotivo: %s\nScore: %.2f\nMovimentos: %d"
-                    % (
-                        args.pdv_station,
-                        status.upper(),
-                        payload["hora"],
-                        payload["fim"],
-                        reason,
-                        cluster["score"],
-                        cluster["count"],
-                    )
-                )
                 try:
-                    send_telegram_photo(args, cluster["image"], caption)
+                    send_telegram_photo(args, cluster["image"], telegram_caption(payload))
                     print("TELEGRAM_ENVIADO", status, cluster["image"], flush=True)
                 except Exception as exc:
                     print("TELEGRAM_ERRO", type(exc).__name__, exc, flush=True)
