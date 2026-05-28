@@ -30,6 +30,11 @@ def parse_args():
     parser.add_argument("--duration", type=int, default=int(os.environ.get("AUDITOR_DURATION", "0")))
     parser.add_argument("--spy-tail", type=int, default=int(os.environ.get("AUDITOR_SPY_TAIL", "350")))
     parser.add_argument("--threshold", type=float, default=float(os.environ.get("AUDITOR_THRESHOLD", "9.0")))
+    parser.add_argument("--virtual-lines", default=os.environ.get("AUDITOR_VIRTUAL_LINES", "entrada:335,354,486,354;scanner:330,223,453,223;saida:317,106,450,106"))
+    parser.add_argument("--virtual-line-threshold", type=float, default=float(os.environ.get("AUDITOR_VIRTUAL_LINE_THRESHOLD", "18.0")))
+    parser.add_argument("--virtual-line-band", type=int, default=int(os.environ.get("AUDITOR_VIRTUAL_LINE_BAND", "14")))
+    parser.add_argument("--virtual-line-window", type=float, default=float(os.environ.get("AUDITOR_VIRTUAL_LINE_WINDOW", "5.0")))
+    parser.add_argument("--virtual-line-cooldown", type=float, default=float(os.environ.get("AUDITOR_VIRTUAL_LINE_COOLDOWN", "0.8")))
     parser.add_argument("--window", type=float, default=float(os.environ.get("AUDITOR_WINDOW", "5.0")))
     parser.add_argument("--item-before-window", type=float, default=float(os.environ.get("AUDITOR_ITEM_BEFORE", "20.0")))
     parser.add_argument("--item-after-window", type=float, default=float(os.environ.get("AUDITOR_ITEM_AFTER", "35.0")))
@@ -188,11 +193,60 @@ def motion_score(previous, current):
     return total / float(len(current))
 
 
+def parse_virtual_lines(text):
+    lines = []
+    for raw in text.split(";"):
+        raw = raw.strip()
+        if not raw:
+            continue
+        name, coords = raw.split(":", 1)
+        x1, y1, x2, y2 = [int(value.strip()) for value in coords.split(",")]
+        lines.append({"name": name.strip().lower(), "coords": (x1, y1, x2, y2)})
+    return lines
+
+
+def line_motion_data(image, line, band):
+    x1, y1, x2, y2 = line["coords"]
+    left = max(0, min(x1, x2) - band)
+    top = max(0, min(y1, y2) - band)
+    right = min(image.width, max(x1, x2) + band)
+    bottom = min(image.height, max(y1, y2) + band)
+    if right <= left or bottom <= top:
+        return []
+    crop = image.crop((left, top, right, bottom)).resize((80, 16)).convert("L")
+    return list(crop.getdata())
+
+
+def virtual_line_hits(previous_lines, current_lines, threshold):
+    hits = []
+    for name, current in current_lines.items():
+        score = motion_score(previous_lines.get(name), current) if previous_lines else 0.0
+        if score >= threshold:
+            hits.append((name, score))
+    return hits
+
+
 def save_evidence(image, roi, path):
     draw = ImageDraw.Draw(image)
     x1, y1, x2, y2 = roi
     for offset in range(3):
         draw.rectangle((x1 - offset, y1 - offset, x2 + offset, y2 + offset), outline=(255, 255, 0))
+    image.save(str(path), "JPEG", quality=88)
+
+
+def save_virtual_line_evidence(image, lines, path):
+    draw = ImageDraw.Draw(image)
+    colors = {
+        "entrada": (0, 190, 255),
+        "scanner": (0, 220, 80),
+        "saida": (180, 80, 190),
+    }
+    for line in lines:
+        color = colors.get(line["name"], (255, 255, 255))
+        x1, y1, x2, y2 = line["coords"]
+        for offset in range(-2, 3):
+            draw.line((x1, y1 + offset, x2, y2 + offset), fill=color)
+        draw.text((x1, max(0, y1 - 18)), line["name"].upper(), fill=color)
     image.save(str(path), "JPEG", quality=88)
 
 
@@ -250,12 +304,16 @@ def write_event(events_file, payload):
 def main():
     args = parse_args()
     roi = tuple(int(v.strip()) for v in args.roi.split(","))
+    virtual_lines = parse_virtual_lines(args.virtual_lines)
     outdir = Path(args.outdir)
     evidences = outdir / "evidencias"
     evidences.mkdir(parents=True, exist_ok=True)
     events_file = outdir / "events.jsonl"
 
     previous = None
+    previous_lines = {}
+    virtual_path = []
+    last_line_hit = {}
     last_motion = datetime.min
     ignore_until = datetime.min
     open_cluster = None
@@ -273,6 +331,7 @@ def main():
 
     print("AUDITOR_INICIO", start.strftime("%Y-%m-%d %H:%M:%S"), flush=True)
     print("ROI", roi, flush=True)
+    print("LINHAS_VIRTUAIS", args.virtual_lines, flush=True)
     print("EVENTOS", events_file, flush=True)
 
     while args.duration <= 0 or (datetime.now() - start).total_seconds() < args.duration:
@@ -395,6 +454,43 @@ def main():
         try:
             jpeg = snapshot(args)
             image, current, skin = motion_image(jpeg, roi)
+            current_lines = {line["name"]: line_motion_data(image, line, args.virtual_line_band) for line in virtual_lines}
+            for name, line_score in virtual_line_hits(previous_lines, current_lines, args.virtual_line_threshold):
+                if (now - last_line_hit.get(name, datetime.min)).total_seconds() < args.virtual_line_cooldown:
+                    continue
+                last_line_hit[name] = now
+                virtual_path.append((name, now, line_score))
+                cutoff = now - timedelta(seconds=args.virtual_line_window)
+                virtual_path = [(line_name, ts, score_value) for line_name, ts, score_value in virtual_path if ts >= cutoff]
+                print("LINHA_VIRTUAL", name, now.strftime("%H:%M:%S"), "score=", round(line_score, 2), flush=True)
+
+                names = [line_name for line_name, _, _ in virtual_path]
+                if all(item in names for item in ("entrada", "scanner", "saida")):
+                    entrada_idx = names.index("entrada")
+                    scanner_idx = names.index("scanner") if "scanner" in names[entrada_idx + 1 :] else -1
+                    if scanner_idx >= 0:
+                        scanner_idx = entrada_idx + 1 + names[entrada_idx + 1 :].index("scanner")
+                    saida_idx = names.index("saida") if scanner_idx >= 0 and "saida" in names[scanner_idx + 1 :] else -1
+                    if saida_idx >= 0:
+                        saida_idx = scanner_idx + 1 + names[scanner_idx + 1 :].index("saida")
+                        sequence = virtual_path[entrada_idx : saida_idx + 1]
+                        stamp = now.strftime("%Y%m%d_%H%M%S")
+                        image_path = evidences / ("pdv%s_linhas_virtuais_%s.jpg" % (args.pdv_station, stamp))
+                        save_virtual_line_evidence(image.copy(), virtual_lines, image_path)
+                        pending.append(
+                            {
+                                "start": sequence[0][1],
+                                "last": sequence[-1][1],
+                                "score": max(score_value for _, _, score_value in sequence),
+                                "skin": skin,
+                                "count": len(sequence),
+                                "image": image_path,
+                                "source": "linhas_virtuais",
+                            }
+                        )
+                        print("PASSAGEM_ITEM_VISUAL", sequence[0][1].strftime("%H:%M:%S"), image_path, flush=True)
+                        virtual_path = []
+
             score = motion_score(previous, current)
             if score > args.threshold and now >= ignore_until and (now - last_motion).total_seconds() > 1:
                 stamp = now.strftime("%Y%m%d_%H%M%S")
@@ -434,6 +530,7 @@ def main():
                 )
                 last_motion = now
             previous = current
+            previous_lines = current_lines
         except Exception as exc:
             print("CAMERA_ERRO", type(exc).__name__, exc, flush=True)
 
@@ -443,6 +540,7 @@ def main():
 
         while pending:
             cluster = pending[0]
+            visual_item = cluster.get("source") == "linhas_virtuais"
             cluster_age = (now - cluster["last"]).total_seconds()
             if cluster_age < args.match_delay:
                 break
@@ -479,15 +577,18 @@ def main():
             elif consult:
                 pending.popleft()
                 if (
-                    cluster["score"] < args.suspect_min_score
-                    or cluster["count"] < args.suspect_min_moves
-                    or (cluster["last"] - cluster["start"]).total_seconds() < args.suspect_min_duration
+                    not visual_item
+                    and (
+                        cluster["score"] < args.suspect_min_score
+                        or cluster["count"] < args.suspect_min_moves
+                        or (cluster["last"] - cluster["start"]).total_seconds() < args.suspect_min_duration
+                    )
                 ):
                     status = "ignorado"
                     subtype = ""
                     reason = "consulta com movimento fraco/curto sem venda"
                     print("IGNORADO", cluster["start"].strftime("%H:%M:%S"), reason, flush=True)
-                elif cluster.get("skin", 0.0) >= args.skin_ignore_ratio:
+                elif not visual_item and cluster.get("skin", 0.0) >= args.skin_ignore_ratio:
                     status = "ignorado"
                     subtype = ""
                     reason = "consulta com mao/braco no scanner"
@@ -517,16 +618,19 @@ def main():
                 reason = "movimento dentro do cooldown de suspeita"
                 print("IGNORADO", cluster["start"].strftime("%H:%M:%S"), reason, flush=True)
             elif (
-                cluster["score"] < args.suspect_min_score
-                or cluster["count"] < args.suspect_min_moves
-                or (cluster["last"] - cluster["start"]).total_seconds() < args.suspect_min_duration
+                not visual_item
+                and (
+                    cluster["score"] < args.suspect_min_score
+                    or cluster["count"] < args.suspect_min_moves
+                    or (cluster["last"] - cluster["start"]).total_seconds() < args.suspect_min_duration
+                )
             ):
                 pending.popleft()
                 status = "ignorado"
                 subtype = ""
                 reason = "movimento fraco/curto sem item"
                 print("IGNORADO", cluster["start"].strftime("%H:%M:%S"), reason, flush=True)
-            elif cluster.get("skin", 0.0) >= args.skin_ignore_ratio:
+            elif not visual_item and cluster.get("skin", 0.0) >= args.skin_ignore_ratio:
                 pending.popleft()
                 status = "ignorado"
                 subtype = ""
@@ -535,8 +639,8 @@ def main():
             else:
                 pending.popleft()
                 status = "suspeita"
-                subtype = "movimento_sem_item"
-                reason = "movimento sem item registrado"
+                subtype = "linhas_virtuais_sem_item" if visual_item else "movimento_sem_item"
+                reason = "passagem pelas 3 linhas sem item registrado" if visual_item else "movimento sem item registrado"
                 suspect_ignore_until = now + timedelta(seconds=args.suspect_cooldown)
                 print("SUSPEITA", cluster["start"].strftime("%H:%M:%S"), reason, cluster["image"], flush=True)
 
@@ -549,6 +653,7 @@ def main():
                 "score": round(cluster["score"], 2),
                 "skin": round(cluster.get("skin", 0.0), 3),
                 "movimentos": cluster["count"],
+                "origem": cluster.get("source", "roi"),
                 "motivo": reason,
                 "imagem": str(cluster["image"]),
             }
