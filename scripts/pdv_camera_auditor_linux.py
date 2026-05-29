@@ -62,6 +62,10 @@ def parse_args():
     parser.add_argument("--ai-conf", type=float, default=float(os.environ.get("AUDITOR_AI_CONF", "0.35")))
     parser.add_argument("--ai-imgsz", type=int, default=int(os.environ.get("AUDITOR_AI_IMGSZ", "640")))
     parser.add_argument("--ai-every-n", type=int, default=int(os.environ.get("AUDITOR_AI_EVERY_N", "3")))
+    parser.add_argument("--collect-training", default=os.environ.get("AUDITOR_COLLECT_TRAINING", "0"))
+    parser.add_argument("--training-dir", default=os.environ.get("AUDITOR_TRAINING_DIR", "/var/log/pdv-camera-auditor/dataset"))
+    parser.add_argument("--training-min-interval", type=float, default=float(os.environ.get("AUDITOR_TRAINING_MIN_INTERVAL", "2.0")))
+    parser.add_argument("--training-max-per-day", type=int, default=int(os.environ.get("AUDITOR_TRAINING_MAX_PER_DAY", "2000")))
     parser.add_argument("--telegram-token", default=os.environ.get("TELEGRAM_BOT_TOKEN", ""))
     parser.add_argument("--telegram-chat-id", default=os.environ.get("TELEGRAM_CHAT_ID", ""))
     parser.add_argument("--telegram-send-types", default=os.environ.get("TELEGRAM_SEND_TYPES", "suspeita"))
@@ -498,6 +502,38 @@ def save_ai_or_regular_evidence(image, roi, lines, path, ai_summary, ai_tracks, 
         save_evidence(image, roi, path)
 
 
+def init_training_collector(args):
+    if not truthy(args.collect_training):
+        return None
+    try:
+        from training_collector import TrainingCollector
+
+        collector = TrainingCollector(
+            Path(args.training_dir),
+            args.pdv_station,
+            args.training_min_interval,
+            args.training_max_per_day,
+        )
+        print("COLETA_TREINO_INICIO", args.training_dir, flush=True)
+        return collector
+    except Exception as exc:
+        print("COLETA_TREINO_ERRO", type(exc).__name__, exc, flush=True)
+        return None
+
+
+def collect_training_image(collector, image, reason, ai_summary, ai_tracks, now):
+    if not collector:
+        return ""
+    try:
+        path = collector.save(image.copy(), reason, ai_summary, ai_tracks, now)
+        if path:
+            print("COLETA_TREINO", reason, path, flush=True)
+        return path
+    except Exception as exc:
+        print("COLETA_TREINO_ERRO", type(exc).__name__, exc, flush=True)
+        return ""
+
+
 def main():
     args = parse_args()
     roi = tuple(int(v.strip()) for v in args.roi.split(","))
@@ -509,6 +545,7 @@ def main():
     ai_runtime = init_ai_runtime(args)
     if ai_runtime:
         ai_runtime["every_n"] = max(1, args.ai_every_n)
+    training_collector = init_training_collector(args)
 
     previous = None
     previous_lines = {}
@@ -678,6 +715,7 @@ def main():
                     stamp = now.strftime("%Y%m%d_%H%M%S")
                     image_path = evidences / ("pdv%s_linhas_virtuais_%s.jpg" % (args.pdv_station, stamp))
                     save_ai_or_regular_evidence(image.copy(), roi, virtual_lines, image_path, ai_summary, ai_tracks, True)
+                    collect_training_image(training_collector, image, "linhas_virtuais", ai_summary, ai_tracks, now)
                     pending.append(
                         {
                             "start": virtual_flow["start"],
@@ -707,6 +745,7 @@ def main():
                 stamp = now.strftime("%Y%m%d_%H%M%S")
                 image_path = evidences / ("pdv001_movimento_%s.jpg" % stamp)
                 save_ai_or_regular_evidence(image, roi, virtual_lines, image_path, ai_summary, ai_tracks)
+                collect_training_image(training_collector, image, "movimento", ai_summary, ai_tracks, now)
                 if (
                     open_cluster
                     and (now - open_cluster["last"]).total_seconds() <= args.cluster_gap
@@ -935,6 +974,8 @@ def main():
             }
             add_ai_to_payload(payload, cluster_ai)
             write_event(events_file, payload)
+            if status == "suspeita":
+                collect_training_image(training_collector, Image.open(str(cluster["image"])).convert("RGB"), "suspeita_%s" % (subtype or "geral"), cluster_ai, cluster.get("ai_tracks", []), now)
             if should_send_telegram(args, status):
                 try:
                     send_telegram_photo(args, cluster["image"], telegram_caption(payload))
