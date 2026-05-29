@@ -819,9 +819,20 @@ def main():
                 if visual_item and cluster_ai.get("ai_enabled") and int(cluster_ai.get("product_count", 0)) > 0:
                     visual_count = int(cluster_ai.get("product_count", 0))
                     cluster["visual_count"] = visual_count
+                ai_without_product = visual_item and cluster_ai.get("ai_enabled") and int(cluster_ai.get("product_count", 0)) <= 0
                 visual_skin = visual_item and cluster.get("skin", 0.0) >= args.skin_ignore_ratio
                 has_weighted_item = visual_item and items_have_weighted(near)
-                if visual_item and visual_count > pdv_count and visual_skin:
+                if visual_item and visual_count > pdv_count and ai_without_product:
+                    status = "casou"
+                    subtype = ""
+                    reason = "pulsos visuais %d / qtd PDV %d, mas IA nao confirmou produto extra; sem fraude automatica: %s" % (
+                        visual_count,
+                        pdv_count,
+                        near[-1][1].replace('"', "'"),
+                    )
+                    ignore_until = now + timedelta(seconds=args.post_item_ignore)
+                    print("CASOU_AI", cluster["start"].strftime("%H:%M:%S"), "item=", reason, flush=True)
+                elif visual_item and visual_count > pdv_count and visual_skin:
                     status = "casou"
                     subtype = ""
                     reason = "qtd visual %d / qtd PDV %d com mao/braco detectado; sem fraude automatica: %s" % (
