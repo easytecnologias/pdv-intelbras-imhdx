@@ -8,6 +8,7 @@ Pacote de integracao entre WRPDV/Sierra e gravador Intelbras iMHDX.
 - `scripts/pdv_intelbras_bridge.py`: servico Python instalado nos PDVs Linux.
 - `scripts/pdv_camera_auditor_linux.py`: monitor local de camera e eventos do Espiao, sem regras antifraude.
 - `scripts/pdv_learning_agent.py`: agente passivo para coletar imagens/contexto e preparar dataset do proximo modelo.
+- `scripts/pdv_shadow_antitheft_agent.py`: agente antifurto em modo sombra, sem alertas, para gerar fila de revisao.
 - `scripts/pdv_telegram_assistant.py`: assistente Telegram para consultar caixa, dinheiro, cupom e produtos do PDV.
 - `scripts/install_bridge_pdv.sh`: instalador generico da ponte no PDV.
 - `services/*.service`: unidades systemd usadas nos PDVs.
@@ -69,6 +70,20 @@ agente tambem mantem:
 /var/log/pdv-learning-agent/knowledge/future_antitheft_handoff.json
 ```
 
+## Agente antifurto sombra
+
+O agente `pdv-shadow-antitheft.service` consome o aprendizado ja coletado e
+cria hipoteses para revisao humana. Ele nao acusa furto, nao envia Telegram e
+nao interfere no PDV.
+
+Saidas:
+
+```text
+/var/log/pdv-shadow-antitheft/AAAAMMDD/observations.jsonl
+/var/log/pdv-shadow-antitheft/AAAAMMDD/review_queue.jsonl
+/var/log/pdv-shadow-antitheft/summary.json
+```
+
 Eventos relevantes do Espiao:
 
 ```text
@@ -127,5 +142,6 @@ Servicos criados:
 pdv-intelbras-bridge.service
 pdv-camera-auditor.service
 pdv-learning-agent.service
+pdv-shadow-antitheft.service
 pdv-telegram-assistant.service
 ```

@@ -1,0 +1,16 @@
+[Unit]
+Description=PDV Shadow Antitheft Agent
+After=network-online.target pdv-learning-agent.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/pdv-shadow-antitheft.env
+ExecStart=/usr/bin/python3 /opt/pdv-shadow-antitheft/pdv_shadow_antitheft_agent.py
+Restart=always
+RestartSec=5
+User=root
+WorkingDirectory=/opt/pdv-shadow-antitheft
+
+[Install]
+WantedBy=multi-user.target

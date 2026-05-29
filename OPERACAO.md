@@ -65,6 +65,25 @@ Ele nao envia Telegram e nao toma decisao. Apenas coleta imagens com contexto
 do Espiao, cria licoes operacionais e atualiza
 `future_antitheft_handoff.json` para o futuro agente antifurto.
 
+## Agente antifurto sombra no PDV1
+
+Servico:
+
+```sh
+systemctl status pdv-shadow-antitheft.service
+journalctl -u pdv-shadow-antitheft.service -n 80 --no-pager
+```
+
+Arquivos gerados:
+
+```sh
+tail -n 5 /var/log/pdv-shadow-antitheft/$(date +%Y%m%d)/review_queue.jsonl
+cat /var/log/pdv-shadow-antitheft/summary.json
+```
+
+Ele consome o `lessons.jsonl`, gera fila de revisao e nao envia Telegram.
+Toda saida fica marcada como `no_accusation=true`.
+
 ## Assistente Telegram no PDV1
 
 Servico:

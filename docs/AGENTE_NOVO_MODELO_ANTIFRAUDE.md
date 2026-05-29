@@ -87,3 +87,30 @@ Contextos aprendidos:
 - `cupom_aberto`
 - `movimento_sem_evento_pdv`
 - `ambiente`
+
+## Agente Antifurto Sombra
+
+Servico proposto: `pdv-shadow-antitheft.service`.
+
+Funcoes:
+
+- Consumir `lessons.jsonl` do agente de aprendizado.
+- Classificar prioridade de revisao sem acusar furto.
+- Separar exemplos normais de candidatos para revisao humana.
+- Manter `no_accusation=true` em todos os registros.
+- Nao enviar Telegram.
+- Nao interferir no caixa.
+
+Destino:
+
+```text
+/var/log/pdv-shadow-antitheft/AAAAMMDD/observations.jsonl
+/var/log/pdv-shadow-antitheft/AAAAMMDD/review_queue.jsonl
+/var/log/pdv-shadow-antitheft/summary.json
+```
+
+Uso no teste:
+
+- Rodar por 2 a 3 dias.
+- Revisar manualmente a fila `review_queue.jsonl`.
+- Usar os acertos e erros como base para o modelo antifurto real.
