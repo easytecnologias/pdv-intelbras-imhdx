@@ -56,16 +56,6 @@ def parse_args():
     parser.add_argument("--open-coupon-item-seconds", type=float, default=float(os.environ.get("AUDITOR_OPEN_COUPON_ITEM_SECONDS", "8.0")))
     parser.add_argument("--open-coupon-max-timeout", type=float, default=float(os.environ.get("AUDITOR_OPEN_COUPON_MAX_TIMEOUT", "360.0")))
     parser.add_argument("--open-coupon-idle-timeout", type=float, default=float(os.environ.get("AUDITOR_OPEN_COUPON_IDLE_TIMEOUT", "60.0")))
-    parser.add_argument("--ai-enabled", default=os.environ.get("AUDITOR_AI_ENABLED", "0"))
-    parser.add_argument("--ai-model", default=os.environ.get("AUDITOR_AI_MODEL", "yolov8n.pt"))
-    parser.add_argument("--ai-device", default=os.environ.get("AUDITOR_AI_DEVICE", "cpu"))
-    parser.add_argument("--ai-conf", type=float, default=float(os.environ.get("AUDITOR_AI_CONF", "0.35")))
-    parser.add_argument("--ai-imgsz", type=int, default=int(os.environ.get("AUDITOR_AI_IMGSZ", "640")))
-    parser.add_argument("--ai-every-n", type=int, default=int(os.environ.get("AUDITOR_AI_EVERY_N", "3")))
-    parser.add_argument("--collect-training", default=os.environ.get("AUDITOR_COLLECT_TRAINING", "0"))
-    parser.add_argument("--training-dir", default=os.environ.get("AUDITOR_TRAINING_DIR", "/var/log/pdv-camera-auditor/dataset"))
-    parser.add_argument("--training-min-interval", type=float, default=float(os.environ.get("AUDITOR_TRAINING_MIN_INTERVAL", "2.0")))
-    parser.add_argument("--training-max-per-day", type=int, default=int(os.environ.get("AUDITOR_TRAINING_MAX_PER_DAY", "2000")))
     parser.add_argument("--telegram-token", default=os.environ.get("TELEGRAM_BOT_TOKEN", ""))
     parser.add_argument("--telegram-chat-id", default=os.environ.get("TELEGRAM_CHAT_ID", ""))
     parser.add_argument("--telegram-send-types", default=os.environ.get("TELEGRAM_SEND_TYPES", "suspeita"))
@@ -261,15 +251,11 @@ def save_virtual_line_evidence(image, lines, path):
     image.save(str(path), "JPEG", quality=88)
 
 
-def save_current_evidence(args, roi, evidences, prefix, virtual_lines=None, ai_runtime=None):
+def save_current_evidence(args, roi, evidences, prefix):
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     image_path = evidences / ("%s_%s.jpg" % (prefix, stamp))
     image = Image.open(BytesIO(snapshot(args))).convert("RGB")
-    if ai_runtime:
-        ai_summary, ai_tracks = analyze_ai_frame(ai_runtime, image, virtual_lines or [], roi, 0, True)
-        save_ai_or_regular_evidence(image, roi, virtual_lines or [], image_path, ai_summary, ai_tracks)
-    else:
-        save_evidence(image, roi, image_path)
+    save_evidence(image, roi, image_path)
     return image_path
 
 
@@ -402,138 +388,6 @@ def write_event(events_file, payload):
         fh.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
-def truthy(value):
-    return str(value).strip().lower() in {"1", "true", "yes", "sim", "on"}
-
-
-def ai_empty(enabled=False, reason="ai desativada"):
-    try:
-        from fraud_decision_ai import empty_ai_summary
-
-        return empty_ai_summary(enabled, reason)
-    except Exception:
-        return {
-            "ai_enabled": bool(enabled),
-            "objects_detected": 0,
-            "product_detected": False,
-            "hand_detected": False,
-            "person_detected": False,
-            "basket_detected": False,
-            "scanner_interaction": False,
-            "track_id": "",
-            "ai_confidence": 0.0,
-            "ai_reason": reason,
-        }
-
-
-def init_ai_runtime(args):
-    if not truthy(args.ai_enabled):
-        return None
-    try:
-        from ai_detector import YoloObjectDetector
-        from ai_tracker import SimpleObjectTracker
-
-        runtime = {
-            "detector": YoloObjectDetector(args.ai_model, args.ai_device, args.ai_conf, args.ai_imgsz),
-            "tracker": SimpleObjectTracker(),
-            "tracks": [],
-            "summary": ai_empty(True, "aguardando frame"),
-            "failed": False,
-        }
-        print("AI_INICIO", args.ai_model, args.ai_device, "conf=", args.ai_conf, flush=True)
-        return runtime
-    except Exception as exc:
-        print("AI_FALLBACK", type(exc).__name__, exc, flush=True)
-        return None
-
-
-def analyze_ai_frame(ai_runtime, image, virtual_lines, roi, frame_index, force=False):
-    if not ai_runtime or ai_runtime.get("failed"):
-        return ai_empty(False), []
-    every_n = max(1, int(ai_runtime.get("every_n", 1)))
-    if not force and frame_index % every_n != 0:
-        return ai_runtime.get("summary", ai_empty(True, "frame reaproveitado")), ai_runtime.get("tracks", [])
-    try:
-        from fraud_decision_ai import build_ai_context
-
-        detections = ai_runtime["detector"].detect(image)
-        tracks = ai_runtime["tracker"].update(detections)
-        summary = build_ai_context(tracks, virtual_lines, roi)
-        ai_runtime["tracks"] = tracks
-        ai_runtime["summary"] = summary
-        return summary, tracks
-    except Exception as exc:
-        ai_runtime["failed"] = True
-        print("AI_FALLBACK", type(exc).__name__, exc, flush=True)
-        return ai_empty(False, "ai falhou: %s" % type(exc).__name__), []
-
-
-def add_ai_to_payload(payload, ai_summary):
-    try:
-        from fraud_decision_ai import add_ai_payload
-
-        return add_ai_payload(payload, ai_summary)
-    except Exception:
-        payload.update(ai_empty(False))
-        return payload
-
-
-def ai_should_ignore(subtype, ai_summary):
-    try:
-        from fraud_decision_ai import should_ignore_without_product
-
-        return should_ignore_without_product(subtype, ai_summary)
-    except Exception:
-        return False
-
-
-def save_ai_or_regular_evidence(image, roi, lines, path, ai_summary, ai_tracks, line_mode=False):
-    if ai_summary and ai_summary.get("ai_enabled"):
-        try:
-            from evidence_drawer import save_ai_evidence
-
-            save_ai_evidence(image, lines, roi, ai_tracks, ai_summary, path)
-            return
-        except Exception as exc:
-            print("AI_EVIDENCIA_ERRO", type(exc).__name__, exc, flush=True)
-    if line_mode:
-        save_virtual_line_evidence(image, lines, path)
-    else:
-        save_evidence(image, roi, path)
-
-
-def init_training_collector(args):
-    if not truthy(args.collect_training):
-        return None
-    try:
-        from training_collector import TrainingCollector
-
-        collector = TrainingCollector(
-            Path(args.training_dir),
-            args.pdv_station,
-            args.training_min_interval,
-            args.training_max_per_day,
-        )
-        print("COLETA_TREINO_INICIO", args.training_dir, flush=True)
-        return collector
-    except Exception as exc:
-        print("COLETA_TREINO_ERRO", type(exc).__name__, exc, flush=True)
-        return None
-
-
-def collect_training_image(collector, image, reason, ai_summary, ai_tracks, now):
-    if not collector:
-        return ""
-    try:
-        path = collector.save(image.copy(), reason, ai_summary, ai_tracks, now)
-        if path:
-            print("COLETA_TREINO", reason, path, flush=True)
-        return path
-    except Exception as exc:
-        print("COLETA_TREINO_ERRO", type(exc).__name__, exc, flush=True)
-        return ""
-
-
 def main():
     args = parse_args()
     roi = tuple(int(v.strip()) for v in args.roi.split(","))
@@ -542,10 +396,6 @@ def main():
     evidences = outdir / "evidencias"
     evidences.mkdir(parents=True, exist_ok=True)
     events_file = outdir / "events.jsonl"
-    ai_runtime = init_ai_runtime(args)
-    if ai_runtime:
-        ai_runtime["every_n"] = max(1, args.ai_every_n)
-    training_collector = init_training_collector(args)
 
     previous = None
     previous_lines = {}
@@ -565,9 +415,6 @@ def main():
     suspect_ignore_until = datetime.min
     start = datetime.now()
     last_spy = start - timedelta(seconds=20)
-    frame_index = 0
-    ai_summary = ai_empty(False)
-    ai_tracks = []
 
     print("AUDITOR_INICIO", start.strftime("%Y-%m-%d %H:%M:%S"), flush=True)
     print("ROI", roi, flush=True)
@@ -609,7 +456,7 @@ def main():
                     if kind == "refund":
                         image_path = ""
                         try:
-                            image_path = str(save_current_evidence(args, roi, evidences, "pdv%s_cancelamento" % args.pdv_station, virtual_lines, ai_runtime))
+                            image_path = str(save_current_evidence(args, roi, evidences, "pdv%s_cancelamento" % args.pdv_station))
                         except Exception as exc:
                             print("CANCELAMENTO_FOTO_ERRO", type(exc).__name__, exc, flush=True)
                         payload = {
@@ -624,7 +471,6 @@ def main():
                             "motivo": text,
                             "imagem": image_path,
                         }
-                        add_ai_to_payload(payload, ai_summary)
                         write_event(events_file, payload)
                         print("CANCELAMENTO_ESTORNO", ts.strftime("%H:%M:%S"), text, image_path, flush=True)
                         if image_path and should_send_telegram(args, "suspeita"):
@@ -651,7 +497,7 @@ def main():
         ):
             image_path = ""
             try:
-                image_path = str(save_current_evidence(args, roi, evidences, "pdv%s_cupom_aberto" % args.pdv_station, virtual_lines, ai_runtime))
+                image_path = str(save_current_evidence(args, roi, evidences, "pdv%s_cupom_aberto" % args.pdv_station))
             except Exception as exc:
                 print("CUPOM_ABERTO_FOTO_ERRO", type(exc).__name__, exc, flush=True)
             reason = (
@@ -674,7 +520,6 @@ def main():
                 "motivo": reason,
                 "imagem": image_path,
             }
-            add_ai_to_payload(payload, ai_summary)
             write_event(events_file, payload)
             cupom_open_alerted = True
             print("CUPOM_ABERTO_TEMPO_DEMAIS", payload["hora"], reason, image_path, flush=True)
@@ -688,8 +533,6 @@ def main():
         try:
             jpeg = snapshot(args)
             image, current, skin = motion_image(jpeg, roi)
-            frame_index += 1
-            ai_summary, ai_tracks = analyze_ai_frame(ai_runtime, image, virtual_lines, roi, frame_index)
             current_lines = {line["name"]: line_motion_data(image, line, args.virtual_line_band) for line in virtual_lines}
             for name, line_score in virtual_line_hits(previous_lines, current_lines, args.virtual_line_threshold):
                 cooldown = args.virtual_scanner_pulse_cooldown if name == "scanner" else args.virtual_line_cooldown
@@ -714,8 +557,7 @@ def main():
                 elif name == "saida" and virtual_flow and virtual_flow["scanner_pulses"] > 0:
                     stamp = now.strftime("%Y%m%d_%H%M%S")
                     image_path = evidences / ("pdv%s_linhas_virtuais_%s.jpg" % (args.pdv_station, stamp))
-                    save_ai_or_regular_evidence(image.copy(), roi, virtual_lines, image_path, ai_summary, ai_tracks, True)
-                    collect_training_image(training_collector, image, "linhas_virtuais", ai_summary, ai_tracks, now)
+                    save_virtual_line_evidence(image.copy(), virtual_lines, image_path)
                     pending.append(
                         {
                             "start": virtual_flow["start"],
@@ -726,8 +568,6 @@ def main():
                             "visual_count": virtual_flow["scanner_pulses"],
                             "image": image_path,
                             "source": "linhas_virtuais",
-                            "ai_summary": ai_summary,
-                            "ai_tracks": ai_tracks,
                         }
                     )
                     print(
@@ -744,8 +584,7 @@ def main():
             if score > args.threshold and now >= ignore_until and (now - last_motion).total_seconds() > 1:
                 stamp = now.strftime("%Y%m%d_%H%M%S")
                 image_path = evidences / ("pdv001_movimento_%s.jpg" % stamp)
-                save_ai_or_regular_evidence(image, roi, virtual_lines, image_path, ai_summary, ai_tracks)
-                collect_training_image(training_collector, image, "movimento", ai_summary, ai_tracks, now)
+                save_evidence(image, roi, image_path)
                 if (
                     open_cluster
                     and (now - open_cluster["last"]).total_seconds() <= args.cluster_gap
@@ -757,8 +596,6 @@ def main():
                     open_cluster["count"] += 1
                     if score >= open_cluster["score"]:
                         open_cluster["image"] = image_path
-                        open_cluster["ai_summary"] = ai_summary
-                        open_cluster["ai_tracks"] = ai_tracks
                 else:
                     if open_cluster:
                         pending.append(open_cluster)
@@ -769,8 +606,6 @@ def main():
                         "skin": skin,
                         "count": 1,
                         "image": image_path,
-                        "ai_summary": ai_summary,
-                        "ai_tracks": ai_tracks,
                     }
                 print(
                     "MOVIMENTO",
@@ -795,7 +630,6 @@ def main():
         while pending:
             cluster = pending[0]
             visual_item = cluster.get("source") == "linhas_virtuais"
-            cluster_ai = cluster.get("ai_summary") or ai_empty(False)
             cluster_age = (now - cluster["last"]).total_seconds()
             if cluster_age < args.match_delay:
                 break
@@ -816,23 +650,9 @@ def main():
                 pending.popleft()
                 pdv_count = items_visual_quantity(near)
                 visual_count = int(cluster.get("visual_count", 1))
-                if visual_item and cluster_ai.get("ai_enabled") and int(cluster_ai.get("product_count", 0)) > 0:
-                    visual_count = int(cluster_ai.get("product_count", 0))
-                    cluster["visual_count"] = visual_count
-                ai_without_product = visual_item and cluster_ai.get("ai_enabled") and int(cluster_ai.get("product_count", 0)) <= 0
                 visual_skin = visual_item and cluster.get("skin", 0.0) >= args.skin_ignore_ratio
                 has_weighted_item = visual_item and items_have_weighted(near)
-                if visual_item and visual_count > pdv_count and ai_without_product:
-                    status = "casou"
-                    subtype = ""
-                    reason = "pulsos visuais %d / qtd PDV %d, mas IA nao confirmou produto extra; sem fraude automatica: %s" % (
-                        visual_count,
-                        pdv_count,
-                        near[-1][1].replace('"', "'"),
-                    )
-                    ignore_until = now + timedelta(seconds=args.post_item_ignore)
-                    print("CASOU_AI", cluster["start"].strftime("%H:%M:%S"), "item=", reason, flush=True)
-                elif visual_item and visual_count > pdv_count and visual_skin:
+                if visual_item and visual_count > pdv_count and visual_skin:
                     status = "casou"
                     subtype = ""
                     reason = "qtd visual %d / qtd PDV %d com mao/braco detectado; sem fraude automatica: %s" % (
@@ -958,16 +778,6 @@ def main():
                 suspect_ignore_until = now + timedelta(seconds=args.suspect_cooldown)
                 print("SUSPEITA", cluster["start"].strftime("%H:%M:%S"), reason, cluster["image"], flush=True)
 
-            if status == "suspeita" and ai_should_ignore(subtype, cluster_ai):
-                original_subtype = subtype
-                status = "ignorado"
-                subtype = ""
-                reason = "IA nao detectou produto para %s; %s" % (
-                    original_subtype,
-                    cluster_ai.get("ai_reason", ""),
-                )
-                print("IGNORADO_AI", cluster["start"].strftime("%H:%M:%S"), reason, flush=True)
-
             payload = {
                 "hora": cluster["start"].strftime("%Y-%m-%d %H:%M:%S"),
                 "fim": cluster["last"].strftime("%Y-%m-%d %H:%M:%S"),
@@ -983,10 +793,7 @@ def main():
                 "motivo": reason,
                 "imagem": str(cluster["image"]),
             }
-            add_ai_to_payload(payload, cluster_ai)
             write_event(events_file, payload)
-            if status == "suspeita":
-                collect_training_image(training_collector, Image.open(str(cluster["image"])).convert("RGB"), "suspeita_%s" % (subtype or "geral"), cluster_ai, cluster.get("ai_tracks", []), now)
             if should_send_telegram(args, status):
                 try:
                     send_telegram_photo(args, cluster["image"], telegram_caption(payload))

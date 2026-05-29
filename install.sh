@@ -97,11 +97,6 @@ prepare_source() {
     download "$REPO_RAW_BASE/scripts/pdv_intelbras_bridge.py" "$TMP_DIR/scripts/pdv_intelbras_bridge.py"
     download "$REPO_RAW_BASE/scripts/pdv_camera_auditor_linux.py" "$TMP_DIR/scripts/pdv_camera_auditor_linux.py"
     download "$REPO_RAW_BASE/scripts/pdv_telegram_assistant.py" "$TMP_DIR/scripts/pdv_telegram_assistant.py"
-    download "$REPO_RAW_BASE/scripts/ai_detector.py" "$TMP_DIR/scripts/ai_detector.py"
-    download "$REPO_RAW_BASE/scripts/ai_tracker.py" "$TMP_DIR/scripts/ai_tracker.py"
-    download "$REPO_RAW_BASE/scripts/fraud_decision_ai.py" "$TMP_DIR/scripts/fraud_decision_ai.py"
-    download "$REPO_RAW_BASE/scripts/evidence_drawer.py" "$TMP_DIR/scripts/evidence_drawer.py"
-    download "$REPO_RAW_BASE/scripts/training_collector.py" "$TMP_DIR/scripts/training_collector.py"
     SOURCE_DIR="$TMP_DIR"
 }
 
@@ -133,7 +128,7 @@ install_packages() {
         return
     fi
     if command_exists apt-get; then
-        apt-get update || say "Aviso: apt-get update falhou; tentando instalar com cache local."
+        apt-get update
         apt-get install -y python3 python3-requests python3-pil ffmpegthumbnailer
     else
         say "apt-get nao encontrado. Verifique manualmente: python3, requests, PIL e ffmpegthumbnailer."
@@ -145,29 +140,6 @@ install_files() {
     install -m 755 "$SOURCE_DIR/scripts/pdv_intelbras_bridge.py" "$BRIDGE_DIR/pdv_intelbras_bridge.py"
     install -m 755 "$SOURCE_DIR/scripts/pdv_camera_auditor_linux.py" "$AUDITOR_DIR/pdv_camera_auditor_linux.py"
     install -m 755 "$SOURCE_DIR/scripts/pdv_telegram_assistant.py" "$ASSISTANT_DIR/pdv_telegram_assistant.py"
-    install -m 644 "$SOURCE_DIR/scripts/ai_detector.py" "$AUDITOR_DIR/ai_detector.py"
-    install -m 644 "$SOURCE_DIR/scripts/ai_tracker.py" "$AUDITOR_DIR/ai_tracker.py"
-    install -m 644 "$SOURCE_DIR/scripts/fraud_decision_ai.py" "$AUDITOR_DIR/fraud_decision_ai.py"
-    install -m 644 "$SOURCE_DIR/scripts/evidence_drawer.py" "$AUDITOR_DIR/evidence_drawer.py"
-    install -m 644 "$SOURCE_DIR/scripts/training_collector.py" "$AUDITOR_DIR/training_collector.py"
-}
-
-install_ai_stack() {
-    if [ "$AUDITOR_AI_ENABLED" != "1" ]; then
-        return
-    fi
-    command_exists apt-get || die "apt-get ausente para instalar Python 3.8/venv da IA"
-    say "Instalando IA local. Pode demorar varios minutos..."
-    apt-get install -y python3.8 python3.8-venv python3.8-distutils
-    python3.8 -m venv "$AUDITOR_DIR/ai-venv"
-    "$AUDITOR_DIR/ai-venv/bin/python" -m pip install --upgrade pip setuptools wheel
-    "$AUDITOR_DIR/ai-venv/bin/python" -m pip install requests pillow ultralytics
-    AUDITOR_AI_MODEL="$AUDITOR_AI_MODEL" "$AUDITOR_DIR/ai-venv/bin/python" - <<'PY'
-import os
-from ultralytics import YOLO
-YOLO(os.environ["AUDITOR_AI_MODEL"])
-print("modelo IA OK: %s" % os.environ["AUDITOR_AI_MODEL"])
-PY
 }
 
 write_bridge_env() {
@@ -208,15 +180,6 @@ AUDITOR_CLUSTER_GAP=3.0
 AUDITOR_MAX_CLUSTER=7.0
 AUDITOR_POST_ITEM_IGNORE=8.0
 AUDITOR_POST_PAYMENT_IGNORE=12.0
-AUDITOR_AI_ENABLED=$AUDITOR_AI_ENABLED
-AUDITOR_AI_MODEL=$AUDITOR_AI_MODEL
-AUDITOR_AI_DEVICE=cpu
-AUDITOR_AI_CONF=0.35
-AUDITOR_AI_EVERY_N=3
-AUDITOR_COLLECT_TRAINING=$AUDITOR_COLLECT_TRAINING
-AUDITOR_TRAINING_DIR=/var/log/pdv-camera-auditor/dataset
-AUDITOR_TRAINING_MIN_INTERVAL=2.0
-AUDITOR_TRAINING_MAX_PER_DAY=2500
 TELEGRAM_BOT_TOKEN=$TELEGRAM_BOT_TOKEN
 TELEGRAM_CHAT_ID=$TELEGRAM_CHAT_ID
 TELEGRAM_SEND_TYPES=suspeita
@@ -244,10 +207,6 @@ EOF
 }
 
 write_services() {
-    auditor_python="/usr/bin/python3"
-    if [ "$AUDITOR_AI_ENABLED" = "1" ]; then
-        auditor_python="$AUDITOR_DIR/ai-venv/bin/python"
-    fi
     cat >/etc/systemd/system/pdv-intelbras-bridge.service <<'EOF'
 [Unit]
 Description=PDV Intelbras iMHDX POS bridge
@@ -268,7 +227,7 @@ StandardError=journal
 WantedBy=multi-user.target
 EOF
 
-    cat >/etc/systemd/system/pdv-camera-auditor.service <<EOF
+    cat >/etc/systemd/system/pdv-camera-auditor.service <<'EOF'
 [Unit]
 Description=PDV Camera Auditor
 After=network-online.target pdv-intelbras-bridge.service
@@ -277,7 +236,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=/etc/pdv-camera-auditor.env
-ExecStart=$auditor_python /opt/pdv-camera-auditor/pdv_camera_auditor_linux.py
+ExecStart=/usr/bin/python3 /opt/pdv-camera-auditor/pdv_camera_auditor_linux.py
 Restart=always
 RestartSec=5
 User=root
@@ -308,18 +267,9 @@ EOF
 }
 
 validate_python() {
-    validator="python3"
-    if [ "$AUDITOR_AI_ENABLED" = "1" ]; then
-        validator="$AUDITOR_DIR/ai-venv/bin/python"
-    fi
-    "$validator" -m py_compile \
+    python3 -m py_compile \
         "$BRIDGE_DIR/pdv_intelbras_bridge.py" \
         "$AUDITOR_DIR/pdv_camera_auditor_linux.py" \
-        "$AUDITOR_DIR/ai_detector.py" \
-        "$AUDITOR_DIR/ai_tracker.py" \
-        "$AUDITOR_DIR/fraud_decision_ai.py" \
-        "$AUDITOR_DIR/evidence_drawer.py" \
-        "$AUDITOR_DIR/training_collector.py" \
         "$ASSISTANT_DIR/pdv_telegram_assistant.py"
 }
 
@@ -365,18 +315,6 @@ collect_config() {
     ask "Usuario da camera/ONVIF" "" CAMERA_USER
     ask_secret "Senha da camera/ONVIF" CAMERA_PASS
     ask "ROI do scanner x1,y1,x2,y2" "382,172,474,302" AUDITOR_ROI
-    if yes_no "Ativar IA antifraude YOLO local? instala pacote pesado" "n"; then
-        AUDITOR_AI_ENABLED=1
-        ask "Caminho do modelo YOLO" "$AUDITOR_DIR/yolov8n.pt" AUDITOR_AI_MODEL
-    else
-        AUDITOR_AI_ENABLED=0
-        AUDITOR_AI_MODEL="$AUDITOR_DIR/yolov8n.pt"
-    fi
-    if yes_no "Ativar coleta de imagens para treino?" "n"; then
-        AUDITOR_COLLECT_TRAINING=1
-    else
-        AUDITOR_COLLECT_TRAINING=0
-    fi
 
     ask "Token do bot Telegram" "" TELEGRAM_BOT_TOKEN
     ask "ID do grupo Telegram" "" TELEGRAM_CHAT_ID
@@ -387,8 +325,6 @@ collect_config() {
     say "  Porta origem UDP: $PDV_SRC_PORT"
     say "  iMHDX: $IMHDX_HOST:$IMHDX_POS_PORT canal $IMHDX_CHANNEL"
     say "  Camera: $CAMERA_HOST"
-    say "  IA antifraude: $AUDITOR_AI_ENABLED"
-    say "  Coleta treino: $AUDITOR_COLLECT_TRAINING"
     say "  Frente: $PDV_BASE_DIR"
     say ""
     yes_no "Confirmar instalacao?" "s" || die "instalacao cancelada"
@@ -408,7 +344,6 @@ collect_config
 backup_existing
 install_packages
 install_files
-install_ai_stack
 write_bridge_env
 write_auditor_env
 write_assistant_env

@@ -108,11 +108,6 @@ Ele cria backup da instalacao anterior, copia os scripts para `/opt`, grava os
 arquivos `.env` em `/etc`, instala os servicos `systemd`, reinicia tudo e mostra
 o status final.
 
-O instalador tambem pergunta se deve ativar a IA antifraude local. Quando ativada,
-ele instala Python 3.8 em paralelo, cria `/opt/pdv-camera-auditor/ai-venv`,
-instala YOLO/Ultralytics, baixa o modelo configurado e roda o auditor pelo venv.
-A coleta de imagens para treino tambem pode ser ligada na instalacao.
-
 Servicos criados:
 
 ```text
