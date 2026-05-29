@@ -673,15 +673,15 @@ def main():
                     ignore_until = now + timedelta(seconds=args.post_item_ignore)
                     print("CASOU", cluster["start"].strftime("%H:%M:%S"), "item=", reason, flush=True)
                 elif visual_item and visual_count > pdv_count:
-                    status = "suspeita"
-                    subtype = "quantidade_visual_maior"
-                    reason = "qtd visual %d maior que qtd PDV %d: %s" % (
+                    status = "casou"
+                    subtype = ""
+                    reason = "pulsos visuais %d / qtd PDV %d; pulso nao e contagem confiavel de item: %s" % (
                         visual_count,
                         pdv_count,
                         near[-1][1].replace('"', "'"),
                     )
-                    suspect_ignore_until = now + timedelta(seconds=args.suspect_cooldown)
-                    print("SUSPEITA_QTD", cluster["start"].strftime("%H:%M:%S"), reason, flush=True)
+                    ignore_until = now + timedelta(seconds=args.post_item_ignore)
+                    print("CASOU", cluster["start"].strftime("%H:%M:%S"), "item=", reason, flush=True)
                 else:
                     status = "casou"
                     subtype = ""
