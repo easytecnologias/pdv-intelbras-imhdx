@@ -52,3 +52,24 @@ Estudar o fluxo real do caixa e propor um novo modelo antifraude antes de qualqu
 - Regras de validacao.
 - Criterios para ligar alerta Telegram.
 - Lista de riscos operacionais.
+
+## Agente Passivo Implementado
+
+Servico proposto: `pdv-learning-agent.service`.
+
+Funcoes:
+
+- Observar snapshot HTTP da camera.
+- Ler eventos recentes do Espiao.
+- Salvar amostras quando houver mudanca de cena ou evento do PDV.
+- Gravar metadados com `label_status=pending_human_review`.
+- Nao gerar alerta.
+- Nao classificar fraude.
+- Nao enviar Telegram.
+
+Destino:
+
+```text
+/var/log/pdv-learning-agent/AAAAMMDD/images
+/var/log/pdv-learning-agent/AAAAMMDD/metadata.jsonl
+```

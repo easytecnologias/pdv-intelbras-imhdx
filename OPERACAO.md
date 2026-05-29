@@ -44,6 +44,25 @@ journalctl -u pdv-camera-auditor.service -n 80 --no-pager
 tail -n 20 /var/log/pdv-camera-auditor/events.jsonl
 ```
 
+## Agente de aprendizado no PDV1
+
+Servico:
+
+```sh
+systemctl status pdv-learning-agent.service
+journalctl -u pdv-learning-agent.service -n 80 --no-pager
+```
+
+Arquivos gerados:
+
+```sh
+find /var/log/pdv-learning-agent -type f | tail
+tail -n 5 /var/log/pdv-learning-agent/$(date +%Y%m%d)/metadata.jsonl
+```
+
+Ele nao envia Telegram e nao toma decisao. Apenas coleta imagens com contexto
+do Espiao para rotulagem humana e treino futuro.
+
 ## Assistente Telegram no PDV1
 
 Servico:

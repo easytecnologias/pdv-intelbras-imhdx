@@ -7,6 +7,7 @@ Pacote de integracao entre WRPDV/Sierra e gravador Intelbras iMHDX.
 - `docs/MANUAL_PDV_INTELBRAS_IMHDX.md`: manual operacional completo.
 - `scripts/pdv_intelbras_bridge.py`: servico Python instalado nos PDVs Linux.
 - `scripts/pdv_camera_auditor_linux.py`: monitor local de camera e eventos do Espiao, sem regras antifraude.
+- `scripts/pdv_learning_agent.py`: agente passivo para coletar imagens/contexto e preparar dataset do proximo modelo.
 - `scripts/pdv_telegram_assistant.py`: assistente Telegram para consultar caixa, dinheiro, cupom e produtos do PDV.
 - `scripts/install_bridge_pdv.sh`: instalador generico da ponte no PDV.
 - `services/*.service`: unidades systemd usadas nos PDVs.
@@ -48,6 +49,19 @@ Antes de publicar no GitHub, revise qualquer arquivo novo adicionado fora desta 
 O monitor do PDV roda no proprio Linux como servico
 `pdv-camera-auditor.service`. Ele verifica a saude do snapshot da camera e
 registra eventos basicos do arquivo local `EspiaoDDMMAA.001`.
+
+## Agente de aprendizado
+
+O agente `pdv-learning-agent.service` observa a camera e o Espiao sem gerar
+alerta. Ele salva amostras em:
+
+```text
+/var/log/pdv-learning-agent/AAAAMMDD/images
+/var/log/pdv-learning-agent/AAAAMMDD/metadata.jsonl
+```
+
+Cada imagem fica com contexto dos eventos recentes do PDV e status
+`pending_human_review`, para posterior rotulagem e treino do novo modelo.
 
 Eventos relevantes do Espiao:
 
@@ -106,5 +120,6 @@ Servicos criados:
 ```text
 pdv-intelbras-bridge.service
 pdv-camera-auditor.service
+pdv-learning-agent.service
 pdv-telegram-assistant.service
 ```
