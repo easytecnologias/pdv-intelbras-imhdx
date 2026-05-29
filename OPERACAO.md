@@ -58,10 +58,12 @@ Arquivos gerados:
 ```sh
 find /var/log/pdv-learning-agent -type f | tail
 tail -n 5 /var/log/pdv-learning-agent/$(date +%Y%m%d)/metadata.jsonl
+tail -n 5 /var/log/pdv-learning-agent/knowledge/lessons.jsonl
 ```
 
 Ele nao envia Telegram e nao toma decisao. Apenas coleta imagens com contexto
-do Espiao para rotulagem humana e treino futuro.
+do Espiao, cria licoes operacionais e atualiza
+`future_antitheft_handoff.json` para o futuro agente antifurto.
 
 ## Assistente Telegram no PDV1
 

@@ -61,7 +61,13 @@ alerta. Ele salva amostras em:
 ```
 
 Cada imagem fica com contexto dos eventos recentes do PDV e status
-`pending_human_review`, para posterior rotulagem e treino do novo modelo.
+`pending_human_review`, para posterior rotulagem e treino do novo modelo. O
+agente tambem mantem:
+
+```text
+/var/log/pdv-learning-agent/knowledge/lessons.jsonl
+/var/log/pdv-learning-agent/knowledge/future_antitheft_handoff.json
+```
 
 Eventos relevantes do Espiao:
 

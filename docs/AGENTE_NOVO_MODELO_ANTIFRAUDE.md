@@ -63,6 +63,9 @@ Funcoes:
 - Ler eventos recentes do Espiao.
 - Salvar amostras quando houver mudanca de cena ou evento do PDV.
 - Gravar metadados com `label_status=pending_human_review`.
+- Gerar uma impressao visual simples da imagem.
+- Classificar contexto operacional provavel, sem acusar fraude.
+- Atualizar um arquivo de entrega para o futuro agente antifurto.
 - Nao gerar alerta.
 - Nao classificar fraude.
 - Nao enviar Telegram.
@@ -72,4 +75,15 @@ Destino:
 ```text
 /var/log/pdv-learning-agent/AAAAMMDD/images
 /var/log/pdv-learning-agent/AAAAMMDD/metadata.jsonl
+/var/log/pdv-learning-agent/knowledge/lessons.jsonl
+/var/log/pdv-learning-agent/knowledge/future_antitheft_handoff.json
 ```
+
+Contextos aprendidos:
+
+- `venda_confirmada`
+- `consulta_preco`
+- `pagamento`
+- `cupom_aberto`
+- `movimento_sem_evento_pdv`
+- `ambiente`

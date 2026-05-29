@@ -108,6 +108,117 @@ def compact_event(event):
     }
 
 
+def visual_fingerprint(jpeg):
+    image = Image.open(BytesIO(jpeg)).convert("RGB")
+    small = image.resize((16, 16)).convert("L")
+    pixels = list(small.getdata())
+    avg = sum(pixels) / float(len(pixels))
+    ahash = "".join("1" if value >= avg else "0" for value in pixels)
+
+    color = image.resize((1, 1)).getpixel((0, 0))
+    edge_image = image.convert("L").resize((64, 36))
+    edge_pixels = list(edge_image.getdata())
+    width = 64
+    edge_total = 0
+    edge_count = 0
+    for index, value in enumerate(edge_pixels):
+        if index % width != width - 1:
+            edge_total += abs(value - edge_pixels[index + 1])
+            edge_count += 1
+        if index + width < len(edge_pixels):
+            edge_total += abs(value - edge_pixels[index + width])
+            edge_count += 1
+
+    return {
+        "ahash": ahash,
+        "brightness": round(avg, 2),
+        "avg_rgb": [int(color[0]), int(color[1]), int(color[2])],
+        "edge_score": round(edge_total / float(edge_count or 1), 2),
+    }
+
+
+def infer_context_label(reason, context):
+    kinds = {event["kind"] for event in context}
+    if "item" in kinds:
+        return "venda_confirmada"
+    if "consultation" in kinds:
+        return "consulta_preco"
+    if "payment" in kinds:
+        return "pagamento"
+    if "start" in kinds:
+        return "cupom_aberto"
+    if reason == "scene_change":
+        return "movimento_sem_evento_pdv"
+    return "ambiente"
+
+
+def future_agent_hint(context_label):
+    hints = {
+        "venda_confirmada": "usar como exemplo normal de item vendido",
+        "consulta_preco": "revisar diferenca entre consulta e venda",
+        "pagamento": "usar como exemplo normal de finalizacao",
+        "cupom_aberto": "usar como contexto inicial de atendimento",
+        "movimento_sem_evento_pdv": "prioridade para revisao humana",
+        "ambiente": "usar como fundo/negativo",
+    }
+    return hints.get(context_label, "revisar manualmente")
+
+
+def write_learning_lesson(root, payload):
+    knowledge_dir = root / "knowledge"
+    knowledge_dir.mkdir(parents=True, exist_ok=True)
+    lesson_path = knowledge_dir / "lessons.jsonl"
+    with lesson_path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    update_handoff(knowledge_dir / "future_antitheft_handoff.json", payload)
+
+
+def update_handoff(path, lesson):
+    if path.exists():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+    else:
+        data = {}
+    if not data:
+        data = {
+            "version": 1,
+            "purpose": "base de aprendizado para futuro agente antifurto",
+            "total_samples": 0,
+            "labels": {},
+            "last_updated": "",
+            "rules": [
+                "nao gerar alerta sem revisao humana",
+                "nao usar movimento como fraude",
+                "usar venda_confirmada como normal positivo",
+                "usar movimento_sem_evento_pdv como fila de revisao",
+            ],
+        }
+
+    label = lesson.get("context_label", "indefinido")
+    labels = data.setdefault("labels", {})
+    bucket = labels.setdefault(label, {"samples": 0, "examples": []})
+    bucket["samples"] += 1
+    data["total_samples"] = int(data.get("total_samples", 0)) + 1
+    data["last_updated"] = lesson.get("time", "")
+
+    examples = bucket.setdefault("examples", [])
+    if len(examples) < 25:
+        examples.append(
+            {
+                "time": lesson.get("time", ""),
+                "image": lesson.get("image", ""),
+                "reason": lesson.get("reason", ""),
+                "change_score": lesson.get("change_score", 0),
+                "fingerprint": lesson.get("visual_fingerprint", {}),
+                "hint": lesson.get("future_agent_hint", ""),
+            }
+        )
+
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def save_sample(args, root, jpeg, reason, score, context, now):
     day = now.strftime("%Y%m%d")
     day_dir = root / day
@@ -120,6 +231,7 @@ def save_sample(args, root, jpeg, reason, score, context, now):
     meta_path = day_dir / "metadata.jsonl"
 
     image_path.write_bytes(jpeg)
+    context_label = infer_context_label(reason, context)
     payload = {
         "time": now.strftime("%Y-%m-%d %H:%M:%S"),
         "pdv": args.pdv_station,
@@ -127,10 +239,14 @@ def save_sample(args, root, jpeg, reason, score, context, now):
         "reason": reason,
         "change_score": round(score, 3),
         "label_status": "pending_human_review",
+        "context_label": context_label,
+        "future_agent_hint": future_agent_hint(context_label),
+        "visual_fingerprint": visual_fingerprint(jpeg),
         "recent_events": [compact_event(event) for event in context],
     }
     with meta_path.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    write_learning_lesson(root, payload)
     return image_path
 
 
