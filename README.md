@@ -6,9 +6,8 @@ Pacote de integracao entre WRPDV/Sierra e gravador Intelbras iMHDX.
 
 - `docs/MANUAL_PDV_INTELBRAS_IMHDX.md`: manual operacional completo.
 - `scripts/pdv_intelbras_bridge.py`: servico Python instalado nos PDVs Linux.
-- `scripts/pdv_camera_auditor.py`: prototipo de auditoria por camera para cruzar movimento na area do scanner com eventos do PDV.
-- `scripts/pdv_camera_auditor_linux.py`: auditor local para rodar direto no PDV Linux, sem depender do Windows.
-- `scripts/pdv_telegram_assistant.py`: assistente Telegram para consultar caixa, dinheiro, cupom, produtos e suspeitas do PDV.
+- `scripts/pdv_camera_auditor_linux.py`: monitor local de camera e eventos do Espiao, sem regras antifraude.
+- `scripts/pdv_telegram_assistant.py`: assistente Telegram para consultar caixa, dinheiro, cupom e produtos do PDV.
 - `scripts/install_bridge_pdv.sh`: instalador generico da ponte no PDV.
 - `services/*.service`: unidades systemd usadas nos PDVs.
 
@@ -44,11 +43,11 @@ deve estar configurada com o IP real do PDV e a porta UDP correspondente.
 Este pacote nao deve conter senhas, tokens ou dumps completos com credenciais.
 Antes de publicar no GitHub, revise qualquer arquivo novo adicionado fora desta pasta.
 
-## Auditoria por camera
+## Monitor de camera
 
-O auditor do PDV1 deve rodar no proprio Linux do PDV como servico
-`pdv-camera-auditor.service`. Ele usa a imagem da camera somente como indicio e
-cruza o movimento na area do scanner com o arquivo local `EspiaoDDMMAA.001`.
+O monitor do PDV roda no proprio Linux como servico
+`pdv-camera-auditor.service`. Ele verifica a saude do snapshot da camera e
+registra eventos basicos do arquivo local `EspiaoDDMMAA.001`.
 
 Eventos relevantes do Espiao:
 
@@ -59,11 +58,6 @@ VIT        -> item vendido
 FIN        -> forma de pagamento
 FECHACUPOM -> cupom fechado
 ```
-
-Quando existe `CSP`, o auditor segura o alerta porque o operador pode estar com
-o produto parado na area enquanto consulta o sistema. O alerta suspeito so deve
-sair quando ha movimento no scanner sem `VIT` correspondente depois da janela de
-espera.
 
 ## Assistente Telegram
 
@@ -82,7 +76,6 @@ Comandos principais:
 /buscar bombom
 /foto 216657 arroz
 arroz 216657
-/suspeitas
 /ajuda
 ```
 
@@ -90,8 +83,8 @@ Pelos botoes do Telegram tambem e possivel escolher a data ativa, informar o
 numero do cupom, pesquisar produto sem digitar o comando completo e pedir uma
 foto do produto no cupom. Para foto, o bot tenta primeiro extrair o quadro da
 gravacao do canal do PDV no iMHDX, exatamente no horario do item; se nao
-conseguir, usa a evidencia local do auditor como fallback. A imagem enviada vai
-com a legenda do PDV escrita sobre o proprio print.
+conseguir, informa a falha. A imagem enviada vai com a legenda do PDV escrita
+sobre o proprio print.
 
 ## Instalador online
 
@@ -103,7 +96,7 @@ chmod +x install.sh
 sudo ./install.sh
 ```
 
-O instalador pergunta os dados do PDV, iMHDX, camera, Telegram e ROI do scanner.
+O instalador pergunta os dados do PDV, iMHDX, camera e Telegram.
 Ele cria backup da instalacao anterior, copia os scripts para `/opt`, grava os
 arquivos `.env` em `/etc`, instala os servicos `systemd`, reinicia tudo e mostra
 o status final.

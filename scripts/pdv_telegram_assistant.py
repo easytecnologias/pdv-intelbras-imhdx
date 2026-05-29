@@ -905,32 +905,6 @@ def clean_search_term(text):
     return clean
 
 
-def suspect_summary(args):
-    path = Path(args.events_file)
-    if not path.exists():
-        return "Sem arquivo de eventos do auditor ainda."
-    rows = []
-    for line in path.read_text(errors="replace").splitlines():
-        try:
-            event = json.loads(line)
-        except Exception:
-            continue
-        event_date = str(event.get("hora", ""))[:10]
-        if event.get("tipo") == "suspeita" and event_date == query_date(args).strftime("%Y-%m-%d"):
-            rows.append(event)
-    if not rows:
-        return "Nenhuma suspeita registrada em %s." % date_label(query_date(args))
-    lines = ["Ultimas suspeitas em %s:" % date_label(query_date(args))]
-    for event in rows[-10:]:
-        lines.append("%s score=%s skin=%s\n%s" % (
-            event.get("hora", "-"),
-            event.get("score", "-"),
-            event.get("skin", "-"),
-            event.get("imagem", "-"),
-        ))
-    return "\n".join(lines)
-
-
 def latest_coupon(args):
     cups, _, _ = read_sales(args)
     for cup in reversed(cups):
@@ -1003,8 +977,6 @@ def handle_command(args, text):
         if not parsed:
             return "Use: /foto 216657 arroz\nOu: arroz 216657"
         return product_photo(args, parsed[0], parsed[1])
-    if cmd == "/suspeitas":
-        return suspect_summary(args)
     return ""
 
 
@@ -1016,7 +988,6 @@ def normalize_button_text(text):
         "caixa": "/caixa",
         "cupom": "/cupom",
         "dinheiro": "/dinheiro",
-        "suspeitas": "/suspeitas",
         "ajuda": "/ajuda",
         "menu": "/menu",
         "ultimo cupom": "/ultimo",

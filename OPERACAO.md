@@ -24,27 +24,16 @@ systemctl is-active pdv-intelbras-bridge.service
 /home/rpdv/frente/Log/logAAAAMMDD.NNN
 ```
 
-## Auditoria de camera no PDV1
+## Monitor de camera no PDV1
 
-O prototipo de auditoria compara movimento na area do scanner com eventos reais
-do PDV. Em producao/teste correto, ele roda dentro do proprio PDV1 Linux pelo
-servico `pdv-camera-auditor.service`, lendo o Espiao local e a camera pela rede.
-Para evitar falso positivo quando o operador demora com o produto parado porque
-esta consultando o sistema, o auditor tambem le eventos `CSP` no Espiao.
+O monitor roda dentro do proprio PDV1 Linux pelo servico
+`pdv-camera-auditor.service`, lendo o Espiao local e validando snapshot da
+camera pela rede. Nao existem regras antifraude ativas neste servico.
 
 ```text
 CSP = consulta de produto/preco
 VIT = item registrado na venda
 FIN = pagamento
-```
-
-Regra pratica:
-
-```text
-movimento + VIT dentro da janela       -> casou
-movimento + CSP recente                -> aguarda consulta
-movimento + pagamento/fim              -> ignora
-movimento sem VIT depois da espera     -> suspeita
 ```
 
 Comandos no PDV1:
@@ -53,7 +42,6 @@ Comandos no PDV1:
 systemctl status pdv-camera-auditor.service
 journalctl -u pdv-camera-auditor.service -n 80 --no-pager
 tail -n 20 /var/log/pdv-camera-auditor/events.jsonl
-find /var/log/pdv-camera-auditor/evidencias -type f | tail
 ```
 
 ## Assistente Telegram no PDV1
@@ -75,7 +63,6 @@ Comandos no grupo:
 /cupom 216530
 /buscar bombom
 /foto 216657 arroz
-/suspeitas
 /ajuda
 ```
 
@@ -91,13 +78,12 @@ produto bombom do cupom 216657
 ```
 
 O botao `Data` define a data ativa da consulta. Depois disso, `Caixa`,
-`Dinheiro`, `Cupom`, `Buscar produto` e `Suspeitas` usam essa data ate que outra
-data seja selecionada.
+`Dinheiro`, `Cupom` e `Buscar produto` usam essa data ate que outra data seja
+selecionada.
 
 No comando de foto, o assistente tenta primeiro baixar a gravacao do canal do
-PDV no iMHDX, no horario do item, e extrair um quadro. Se o iMHDX nao responder
-ou nao gerar imagem, ele usa a foto local salva pelo auditor como fallback. A
-foto enviada no Telegram ja sai com a legenda do PDV sobreposta no print.
+PDV no iMHDX, no horario do item, e extrair um quadro. A foto enviada no
+Telegram ja sai com a legenda do PDV sobreposta no print.
 
 ## Instalacao online
 
