@@ -120,6 +120,14 @@ O assistente roda separado do auditor, pelo servico
 `pdv-telegram-assistant.service`. Ele responde comandos no grupo configurado no
 PDV e le o Espiao local do dia.
 
+Quando uma foto de produto ainda nao conhecido e enviada, o bot pergunta o que
+aparece na imagem. A resposta humana alimenta:
+
+```text
+/var/log/pdv-product-learning/products.json
+/var/log/pdv-product-learning/labels.jsonl
+```
+
 Comandos principais:
 
 ```text

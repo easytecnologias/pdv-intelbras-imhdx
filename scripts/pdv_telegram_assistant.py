@@ -38,6 +38,7 @@ def parse_args():
     parser.add_argument("--imhdx-window-after", type=int, default=int(os.environ.get("IMHDX_WINDOW_AFTER", "8")))
     parser.add_argument("--photo-frame-offset", type=int, default=int(os.environ.get("PHOTO_FRAME_OFFSET", "3")))
     parser.add_argument("--ffmpegthumbnailer", default=os.environ.get("FFMPEGTHUMBNAILER", "ffmpegthumbnailer"))
+    parser.add_argument("--product-learning-dir", default=os.environ.get("PRODUCT_LEARNING_DIR", "/var/log/pdv-product-learning"))
     parser.add_argument("--poll-timeout", type=int, default=25)
     args = parser.parse_args()
     if not args.token or not args.chat_id:
@@ -151,6 +152,8 @@ def send_photo(args, image_path, caption):
 def send_response(args, response):
     if isinstance(response, dict) and response.get("photo"):
         send_photo(args, response["photo"], response.get("caption", ""))
+        if response.get("question"):
+            send_message(args, response["question"])
     elif isinstance(response, dict):
         send_message(args, response.get("text", "Sem resposta."), response.get("reply_markup"))
     else:
@@ -329,6 +332,171 @@ def payment_icon(name):
 
 def product_search_state_file(args, chat_id):
     return Path(args.state_dir) / ("product_search_%s.json" % chat_id)
+
+
+def product_learning_dir(args):
+    path = Path(args.product_learning_dir)
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def product_knowledge_file(args):
+    return product_learning_dir(args) / "products.json"
+
+
+def product_labels_file(args):
+    return product_learning_dir(args) / "labels.jsonl"
+
+
+def pending_product_question_file(args, chat_id):
+    return product_learning_dir(args) / ("pending_%s.json" % chat_id)
+
+
+def load_product_knowledge(args):
+    path = product_knowledge_file(args)
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def save_product_knowledge(args, data):
+    product_knowledge_file(args).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def product_is_known(args, code):
+    if not code:
+        return False
+    item = load_product_knowledge(args).get(str(code), {})
+    return item.get("status") == "conhecido" and item.get("labels_confirmados")
+
+
+def save_pending_product_question(args, chat_id, payload):
+    path = pending_product_question_file(args, chat_id)
+    payload["created"] = int(time.time())
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def pop_pending_product_question(args, chat_id):
+    path = pending_product_question_file(args, chat_id)
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        data = None
+    try:
+        path.unlink()
+    except Exception:
+        pass
+    if not data or time.time() - int(data.get("created", 0)) > 3600:
+        return None
+    return data
+
+
+def append_product_label(args, payload):
+    path = product_labels_file(args)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+
+def parse_human_product_labels(text):
+    clean = normalize_text(text).lower()
+    remove_words = [
+        "isso e",
+        "isso eh",
+        "e um",
+        "e uma",
+        "nessa imagem",
+        "na imagem",
+        "tem",
+        "itens",
+        "item",
+        "outro",
+        "outra",
+    ]
+    for word in remove_words:
+        clean = clean.replace(word, " ")
+    clean = re.sub(r"\bum\b", " ", clean)
+    clean = re.sub(r"\buma\b", " ", clean)
+    clean = re.sub(r"\be\b", ",", clean)
+    clean = re.sub(r"\b\d+\b", " ", clean)
+    clean = clean.replace(";", ",")
+    clean = clean.replace("|", ",")
+    labels = []
+    for part in clean.split(","):
+        label = " ".join(part.strip(" .:-").split())
+        if label and label not in labels:
+            labels.append(label)
+    return labels
+
+
+def choose_item_label(labels, desc):
+    if len(labels) == 1:
+        return labels[0]
+    desc_norm = normalize_text(desc).lower()
+    for label in labels:
+        label_norm = normalize_text(label).lower()
+        if label_norm and (label_norm in desc_norm or any(word in desc_norm for word in label_norm.split())):
+            return label
+    return ""
+
+
+def learn_product_from_answer(args, chat_id, text):
+    pending = pop_pending_product_question(args, chat_id)
+    if not pending:
+        return ""
+    labels = parse_human_product_labels(text)
+    if not labels:
+        return "Nao entendi o produto. Pode responder tipo: isso e arroz."
+
+    code = str(pending.get("code") or "")
+    desc = pending.get("desc") or ""
+    item_label = choose_item_label(labels, desc)
+    payload = {
+        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "pdv": args.pdv_station,
+        "source": "telegram_human_confirmed",
+        "image": pending.get("image", ""),
+        "cupom": pending.get("cupom", ""),
+        "code": code,
+        "descricao": desc,
+        "qty": pending.get("qty", ""),
+        "item_time": pending.get("item_time", ""),
+        "labels": labels,
+        "item_label": item_label,
+        "raw_answer": text,
+    }
+    append_product_label(args, payload)
+
+    if code and item_label:
+        knowledge = load_product_knowledge(args)
+        product = knowledge.setdefault(
+            code,
+            {
+                "descricao": desc,
+                "labels_confirmados": [],
+                "confirmacoes": 0,
+                "status": "novo",
+                "examples": [],
+            },
+        )
+        confirmed = product.setdefault("labels_confirmados", [])
+        if item_label not in confirmed:
+            confirmed.append(item_label)
+        product["descricao"] = desc
+        product["confirmacoes"] = int(product.get("confirmacoes", 0)) + 1
+        product["status"] = "conhecido"
+        product["last_seen"] = payload["time"]
+        examples = product.setdefault("examples", [])
+        if len(examples) < 20:
+            examples.append({"image": pending.get("image", ""), "cupom": pending.get("cupom", ""), "label": item_label})
+        save_product_knowledge(args, knowledge)
+        return "Aprendi: %s = %s. Nao vou perguntar de novo para esse codigo." % (desc.title(), item_label)
+
+    return "Salvei os rotulos da imagem: %s. Ainda nao marquei o codigo como conhecido porque havia varios itens." % ", ".join(labels)
 
 
 def save_product_search(args, chat_id, term):
@@ -865,7 +1033,30 @@ def product_photo(args, cupom, term):
             event.get("fonte", "auditor local"),
         )
     )
-    return {"photo": event["imagem"], "caption": caption}
+    if product_is_known(args, item.get("code", "")):
+        return {"photo": event["imagem"], "caption": caption}
+
+    save_pending_product_question(
+        args,
+        args.chat_id,
+        {
+            "image": event["imagem"],
+            "cupom": str(cupom),
+            "code": item.get("code", ""),
+            "desc": item.get("desc", ""),
+            "qty": item.get("qty", ""),
+            "item_time": item.get("time", ""),
+            "date": query_date(args).strftime("%Y-%m-%d"),
+        },
+    )
+    question = (
+        "Esse produto ainda nao esta conhecido.\n"
+        "O que aparece nessa imagem?\n\n"
+        "Exemplos:\n"
+        "isso e arroz\n"
+        "tem coca cola, macarrao e laranja"
+    )
+    return {"photo": event["imagem"], "caption": caption, "question": question}
 
 
 def split_cupom_product(text):
@@ -1139,7 +1330,12 @@ def main():
                 print("COMANDO", text, flush=True)
                 try:
                     normalized = normalize_button_text(text)
-                    if normalized == "/buscar":
+                    learned = ""
+                    if not text.startswith("/"):
+                        learned = learn_product_from_answer(args, chat.get("id"), text)
+                    if learned:
+                        answer = learned
+                    elif normalized == "/buscar":
                         set_pending_mode(args, chat.get("id"), "search")
                         answer = "Qual produto voce quer buscar? Exemplo: bombom, arroz, coca, leite."
                     elif normalized == "/data":

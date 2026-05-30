@@ -195,6 +195,7 @@ IMHDX_CHANNEL=$IMHDX_CHANNEL
 IMHDX_WINDOW_BEFORE=2
 IMHDX_WINDOW_AFTER=8
 FFMPEGTHUMBNAILER=ffmpegthumbnailer
+PRODUCT_LEARNING_DIR=/var/log/pdv-product-learning
 EOF
     chmod 600 /etc/pdv-telegram-assistant.env
 }
