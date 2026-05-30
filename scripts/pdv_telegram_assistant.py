@@ -464,13 +464,48 @@ def parse_human_product_labels(text):
     return labels
 
 
+def is_negative_product_answer(text):
+    clean = normalize_text(text).lower()
+    patterns = [
+        "nao tem",
+        "nao ta",
+        "nao esta",
+        "nao aparece",
+        "nao vejo",
+        "sem produto",
+        "imagem ruim",
+        "produto nao visivel",
+        "produto nao aparece",
+    ]
+    return any(pattern in clean for pattern in patterns)
+
+
+def is_menu_or_command_answer(text):
+    normalized = normalize_button_text(text)
+    if normalized.startswith("/"):
+        return True
+    menu_texts = {
+        "status",
+        "data",
+        "caixa",
+        "cupom",
+        "dinheiro",
+        "menu",
+        "ultimo cupom",
+        "buscar produto",
+        "foto produto",
+        "ensinar produtos",
+        "produto mais vendido",
+    }
+    return text.strip().lower() in menu_texts
+
+
 def choose_item_label(labels, desc):
-    if len(labels) == 1:
-        return labels[0]
     desc_norm = normalize_text(desc).lower()
     for label in labels:
         label_norm = normalize_text(label).lower()
-        if label_norm and (label_norm in desc_norm or any(word in desc_norm for word in label_norm.split())):
+        words = [word for word in label_norm.split() if len(word) >= 4]
+        if label_norm and (label_norm in desc_norm or any(word in desc_norm for word in words)):
             return label
     return ""
 
@@ -479,13 +514,18 @@ def learn_product_from_answer(args, chat_id, text):
     pending = pop_pending_product_question(args, chat_id)
     if not pending:
         return ""
+    if is_menu_or_command_answer(text):
+        save_pending_product_question(args, chat_id, pending)
+        return ""
+
+    negative = is_negative_product_answer(text)
     labels = parse_human_product_labels(text)
-    if not labels:
+    if not labels and not negative:
         return "Nao entendi o produto. Pode responder tipo: isso e arroz."
 
     code = str(pending.get("code") or "")
     desc = pending.get("desc") or ""
-    item_label = choose_item_label(labels, desc)
+    item_label = "" if negative else choose_item_label(labels, desc)
     payload = {
         "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "pdv": args.pdv_station,
@@ -498,9 +538,16 @@ def learn_product_from_answer(args, chat_id, text):
         "item_time": pending.get("item_time", ""),
         "labels": labels,
         "item_label": item_label,
+        "visibility": "produto_nao_visivel" if negative else "produto_visivel",
         "raw_answer": text,
     }
     append_product_label(args, payload)
+
+    if negative:
+        message = "Salvei como produto nao visivel. Nao marquei esse codigo como conhecido."
+        if load_teaching_state(args, chat_id).get("active"):
+            return {"text": message + "\n\nVou procurar o proximo produto.", "next_teaching": True}
+        return message
 
     if code and item_label:
         knowledge = load_product_knowledge(args)

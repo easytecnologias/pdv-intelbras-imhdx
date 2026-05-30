@@ -132,6 +132,9 @@ O botao `Ensinar produtos` procura automaticamente itens vendidos ainda
 desconhecidos, envia uma foto por vez e espera a resposta humana antes de
 mandar o proximo.
 
+Respostas como `nao tem produto`, `nao aparece` ou `imagem ruim` sao salvas
+como produto nao visivel e nao tornam o codigo conhecido.
+
 Comandos principais:
 
 ```text
