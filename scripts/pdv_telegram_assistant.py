@@ -20,6 +20,18 @@ from PIL import Image, ImageDraw, ImageFont
 LINE_RE = re.compile(r"^(?P<time>\d{2}:\d{2}:\d{2}):(?P<event>[A-Z]+)\s*\|\s*(?P<body>.*)$")
 FIELD_RE = re.compile(r"(\w+):\s*([^|]+)")
 SEARCH_PAGE_SIZE = 10
+PRODUCT_CATEGORIES = [
+    "bebida",
+    "biscoito",
+    "carne",
+    "hortifruti",
+    "higiene",
+    "limpeza",
+    "mercearia",
+    "sacola",
+    "sem_produto",
+    "imagem_ruim",
+]
 
 
 def parse_args():
@@ -135,7 +147,7 @@ def answer_callback(args, callback_id, text=""):
     api(args, "answerCallbackQuery", data={"callback_query_id": callback_id, "text": text[:180]})
 
 
-def send_photo(args, image_path, caption):
+def send_photo(args, image_path, caption, reply_markup=None):
     with open(str(image_path), "rb") as photo:
         api(
             args,
@@ -143,7 +155,7 @@ def send_photo(args, image_path, caption):
             data={
                 "chat_id": args.chat_id,
                 "caption": caption[:1024],
-                "reply_markup": json.dumps(main_keyboard()),
+                "reply_markup": json.dumps(reply_markup or main_keyboard()),
             },
             files={"photo": photo},
         )
@@ -151,7 +163,7 @@ def send_photo(args, image_path, caption):
 
 def send_response(args, response):
     if isinstance(response, dict) and response.get("photo"):
-        send_photo(args, response["photo"], response.get("caption", ""))
+        send_photo(args, response["photo"], response.get("caption", ""), response.get("reply_markup"))
         if response.get("question"):
             send_message(args, response["question"])
     elif isinstance(response, dict):
@@ -381,6 +393,13 @@ def product_is_known(args, code):
     return item.get("status") == "conhecido" and item.get("labels_confirmados")
 
 
+def known_product_category(args, code):
+    if not code:
+        return ""
+    item = load_product_knowledge(args).get(str(code), {})
+    return str(item.get("categoria") or "")
+
+
 def save_pending_product_question(args, chat_id, payload):
     path = pending_product_question_file(args, chat_id)
     payload["created"] = int(time.time())
@@ -408,6 +427,65 @@ def append_product_label(args, payload):
     path = product_labels_file(args)
     with path.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+
+def category_keyboard():
+    rows = [
+        [{"text": "Bebida", "callback_data": "learncat:bebida"}, {"text": "Biscoito", "callback_data": "learncat:biscoito"}],
+        [{"text": "Carne", "callback_data": "learncat:carne"}, {"text": "Hortifruti", "callback_data": "learncat:hortifruti"}],
+        [{"text": "Higiene", "callback_data": "learncat:higiene"}, {"text": "Limpeza", "callback_data": "learncat:limpeza"}],
+        [{"text": "Mercearia", "callback_data": "learncat:mercearia"}, {"text": "Sacola", "callback_data": "learncat:sacola"}],
+        [{"text": "Nao aparece", "callback_data": "learncat:sem_produto"}, {"text": "Imagem ruim", "callback_data": "learncat:imagem_ruim"}],
+    ]
+    return {"inline_keyboard": rows}
+
+
+def normalize_product_category(text):
+    clean = normalize_text(text).lower()
+    mapping = {
+        "refrigerante": "bebida",
+        "guarana": "bebida",
+        "coca": "bebida",
+        "agua": "bebida",
+        "suco": "bebida",
+        "bebida": "bebida",
+        "biscoito": "biscoito",
+        "bolacha": "biscoito",
+        "wafer": "biscoito",
+        "carne": "carne",
+        "frango": "carne",
+        "bisteca": "carne",
+        "suina": "carne",
+        "limao": "hortifruti",
+        "manga": "hortifruti",
+        "laranja": "hortifruti",
+        "banana": "hortifruti",
+        "hortifruti": "hortifruti",
+        "barb": "higiene",
+        "sabonete": "higiene",
+        "palmolive": "higiene",
+        "colgate": "higiene",
+        "higiene": "higiene",
+        "limpeza": "limpeza",
+        "detergente": "limpeza",
+        "sabao": "limpeza",
+        "colorifico": "mercearia",
+        "arroz": "mercearia",
+        "feijao": "mercearia",
+        "macarrao": "mercearia",
+        "requeijao": "mercearia",
+        "palito": "mercearia",
+        "mercearia": "mercearia",
+        "sacola": "sacola",
+    }
+    if clean in PRODUCT_CATEGORIES:
+        return clean
+    for word, category in mapping.items():
+        if word in clean:
+            return category
+    if is_negative_product_answer(text):
+        return "sem_produto"
+    return ""
 
 
 def save_teaching_state(args, chat_id, payload):
@@ -518,7 +596,8 @@ def learn_product_from_answer(args, chat_id, text):
         save_pending_product_question(args, chat_id, pending)
         return ""
 
-    negative = is_negative_product_answer(text)
+    category = normalize_product_category(text)
+    negative = category in ("sem_produto", "imagem_ruim") or is_negative_product_answer(text)
     labels = parse_human_product_labels(text)
     if not labels and not negative:
         return "Nao entendi o produto. Pode responder tipo: isso e arroz."
@@ -538,6 +617,7 @@ def learn_product_from_answer(args, chat_id, text):
         "item_time": pending.get("item_time", ""),
         "labels": labels,
         "item_label": item_label,
+        "category": category,
         "visibility": "produto_nao_visivel" if negative else "produto_visivel",
         "raw_answer": text,
     }
@@ -549,7 +629,7 @@ def learn_product_from_answer(args, chat_id, text):
             return {"text": message + "\n\nVou procurar o proximo produto.", "next_teaching": True}
         return message
 
-    if code and item_label:
+    if code and category and not negative:
         knowledge = load_product_knowledge(args)
         product = knowledge.setdefault(
             code,
@@ -564,15 +644,16 @@ def learn_product_from_answer(args, chat_id, text):
         confirmed = product.setdefault("labels_confirmados", [])
         if item_label not in confirmed:
             confirmed.append(item_label)
+        product["categoria"] = category
         product["descricao"] = desc
         product["confirmacoes"] = int(product.get("confirmacoes", 0)) + 1
         product["status"] = "conhecido"
         product["last_seen"] = payload["time"]
         examples = product.setdefault("examples", [])
         if len(examples) < 20:
-            examples.append({"image": pending.get("image", ""), "cupom": pending.get("cupom", ""), "label": item_label})
+            examples.append({"image": pending.get("image", ""), "cupom": pending.get("cupom", ""), "label": item_label, "category": category})
         save_product_knowledge(args, knowledge)
-        message = "Aprendi: %s = %s. Nao vou perguntar de novo para esse codigo." % (desc.title(), item_label)
+        message = "Aprendi: %s = categoria %s. Nao vou perguntar de novo para esse codigo." % (desc.title(), category)
         if load_teaching_state(args, chat_id).get("active"):
             return {"text": message + "\n\nVou procurar o proximo produto.", "next_teaching": True}
         return message
@@ -1117,7 +1198,10 @@ def product_photo(args, cupom, term):
             event.get("fonte", "auditor local"),
         )
     )
+    category = known_product_category(args, item.get("code", ""))
     if product_is_known(args, item.get("code", "")):
+        if category:
+            caption += "\n\nCategoria aprendida: %s" % category
         return {"photo": event["imagem"], "caption": caption}
 
     save_pending_product_question(
@@ -1135,12 +1219,12 @@ def product_photo(args, cupom, term):
     )
     question = (
         "Esse produto ainda nao esta conhecido.\n"
-        "O que aparece nessa imagem?\n\n"
+        "Escolha a categoria ou responda com texto.\n\n"
         "Exemplos:\n"
         "isso e arroz\n"
         "tem coca cola, macarrao e laranja"
     )
-    return {"photo": event["imagem"], "caption": caption, "question": question}
+    return {"photo": event["imagem"], "caption": caption, "question": question, "reply_markup": category_keyboard()}
 
 
 def product_photo_for_item(args, cupom, item):
@@ -1190,7 +1274,8 @@ def product_photo_for_item(args, cupom, item):
     return {
         "photo": event["imagem"],
         "caption": caption,
-        "question": "O que aparece nessa imagem?",
+        "question": "Escolha a categoria ou responda com texto.",
+        "reply_markup": category_keyboard(),
     }
 
 
@@ -1457,6 +1542,16 @@ def handle_callback(args, callback):
         else:
             edit_message(args, chat_id, message_id, result)
             answer_callback(args, callback_id)
+        return
+    if data.startswith("learncat:"):
+        category = data.split(":", 1)[1]
+        if category not in PRODUCT_CATEGORIES:
+            answer_callback(args, callback_id, "Categoria invalida.")
+            return
+        answer_callback(args, callback_id, category)
+        result = learn_product_from_answer(args, chat_id, category)
+        if result:
+            send_response(args, result)
         return
     answer_callback(args, callback_id)
 

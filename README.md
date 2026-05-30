@@ -135,6 +135,10 @@ mandar o proximo.
 Respostas como `nao tem produto`, `nao aparece` ou `imagem ruim` sao salvas
 como produto nao visivel e nao tornam o codigo conhecido.
 
+O aprendizado usa categorias principais, como `bebida`, `biscoito`, `carne`,
+`hortifruti`, `higiene`, `limpeza` e `mercearia`. Quando um codigo ja e
+conhecido, a foto do produto passa a mostrar a categoria aprendida.
+
 Comandos principais:
 
 ```text

@@ -51,6 +51,9 @@ def is_bad_label(row):
         return True
     if raw.startswith("nao ") or label.startswith("nao "):
         return True
+    category = normalize(row.get("category"))
+    if category and category not in ("sem_produto", "imagem_ruim"):
+        return False
     if label and desc:
         words = [word for word in label.split() if len(word) >= 4]
         if words and not any(word in desc for word in words):
