@@ -128,6 +128,10 @@ aparece na imagem. A resposta humana alimenta:
 /var/log/pdv-product-learning/labels.jsonl
 ```
 
+O botao `Ensinar produtos` procura automaticamente itens vendidos ainda
+desconhecidos, envia uma foto por vez e espera a resposta humana antes de
+mandar o proximo.
+
 Comandos principais:
 
 ```text

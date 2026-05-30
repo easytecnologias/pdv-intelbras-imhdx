@@ -156,6 +156,9 @@ def send_response(args, response):
             send_message(args, response["question"])
     elif isinstance(response, dict):
         send_message(args, response.get("text", "Sem resposta."), response.get("reply_markup"))
+        if response.get("next_teaching"):
+            time.sleep(1)
+            send_response(args, next_unknown_product(args, args.chat_id))
     else:
         send_message(args, str(response))
 
@@ -166,7 +169,8 @@ def main_keyboard():
             [{"text": "Status"}, {"text": "Data"}],
             [{"text": "Caixa"}, {"text": "Cupom"}],
             [{"text": "Ultimo cupom"}, {"text": "Buscar produto"}],
-            [{"text": "Foto produto"}, {"text": "Produto mais vendido"}],
+            [{"text": "Foto produto"}, {"text": "Ensinar produtos"}],
+            [{"text": "Produto mais vendido"}],
         ],
         "resize_keyboard": True,
         "one_time_keyboard": False,
@@ -352,6 +356,10 @@ def pending_product_question_file(args, chat_id):
     return product_learning_dir(args) / ("pending_%s.json" % chat_id)
 
 
+def teaching_state_file(args, chat_id):
+    return product_learning_dir(args) / ("teaching_%s.json" % chat_id)
+
+
 def load_product_knowledge(args):
     path = product_knowledge_file(args)
     if not path.exists():
@@ -400,6 +408,29 @@ def append_product_label(args, payload):
     path = product_labels_file(args)
     with path.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+
+def save_teaching_state(args, chat_id, payload):
+    path = teaching_state_file(args, chat_id)
+    payload["updated"] = int(time.time())
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def load_teaching_state(args, chat_id):
+    path = teaching_state_file(args, chat_id)
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def clear_teaching_state(args, chat_id):
+    try:
+        teaching_state_file(args, chat_id).unlink()
+    except Exception:
+        pass
 
 
 def parse_human_product_labels(text):
@@ -494,9 +525,15 @@ def learn_product_from_answer(args, chat_id, text):
         if len(examples) < 20:
             examples.append({"image": pending.get("image", ""), "cupom": pending.get("cupom", ""), "label": item_label})
         save_product_knowledge(args, knowledge)
-        return "Aprendi: %s = %s. Nao vou perguntar de novo para esse codigo." % (desc.title(), item_label)
+        message = "Aprendi: %s = %s. Nao vou perguntar de novo para esse codigo." % (desc.title(), item_label)
+        if load_teaching_state(args, chat_id).get("active"):
+            return {"text": message + "\n\nVou procurar o proximo produto.", "next_teaching": True}
+        return message
 
-    return "Salvei os rotulos da imagem: %s. Ainda nao marquei o codigo como conhecido porque havia varios itens." % ", ".join(labels)
+    message = "Salvei os rotulos da imagem: %s. Ainda nao marquei o codigo como conhecido porque havia varios itens." % ", ".join(labels)
+    if load_teaching_state(args, chat_id).get("active"):
+        return {"text": message + "\n\nVou procurar o proximo produto.", "next_teaching": True}
+    return message
 
 
 def save_product_search(args, chat_id, term):
@@ -1059,6 +1096,86 @@ def product_photo(args, cupom, term):
     return {"photo": event["imagem"], "caption": caption, "question": question}
 
 
+def product_photo_for_item(args, cupom, item):
+    event = imhdx_photo_for_item(args, cupom, item)
+    if not event:
+        event = find_photo_for_item(args, item)
+        if event:
+            try:
+                event["imagem"] = overlay_pdv_caption(args, event["imagem"], cupom, item, "auditor local")
+            except Exception:
+                pass
+    if not event:
+        return None
+
+    caption = (
+        "Aprendizado de produto\n"
+        "Data: %s\n"
+        "Cupom: %s\n\n"
+        "Produto no PDV: %s\n"
+        "Codigo: %s\n"
+        "Quantidade: %s\n"
+        "Hora do item: %s\n\n"
+        "Fonte: %s"
+        % (
+            date_label(query_date(args)),
+            cupom,
+            item["desc"].title(),
+            item["code"] or "sem codigo",
+            item["qty"],
+            item["time"],
+            event.get("fonte", "auditor local"),
+        )
+    )
+    save_pending_product_question(
+        args,
+        args.chat_id,
+        {
+            "image": event["imagem"],
+            "cupom": str(cupom),
+            "code": item.get("code", ""),
+            "desc": item.get("desc", ""),
+            "qty": item.get("qty", ""),
+            "item_time": item.get("time", ""),
+            "date": query_date(args).strftime("%Y-%m-%d"),
+        },
+    )
+    return {
+        "photo": event["imagem"],
+        "caption": caption,
+        "question": "O que aparece nessa imagem?",
+    }
+
+
+def next_unknown_product(args, chat_id):
+    state = load_teaching_state(args, chat_id)
+    tried = set(state.get("tried", []))
+    cups, _, _ = read_sales(args)
+    candidates = []
+    for cup in reversed(cups):
+        for item in reversed(cup.get("items", [])):
+            code = item.get("code") or ""
+            if not code or product_is_known(args, code) or code in tried:
+                continue
+            candidates.append((cup, item))
+
+    for cup, item in candidates:
+        code = item.get("code") or ""
+        tried.add(code)
+        save_teaching_state(args, chat_id, {"active": True, "tried": sorted(tried)})
+        response = product_photo_for_item(args, cup.get("number", ""), item)
+        if response:
+            return response
+
+    clear_teaching_state(args, chat_id)
+    return {"text": "Nao achei mais produto desconhecido com foto para ensinar nessa data."}
+
+
+def start_product_teaching(args, chat_id):
+    save_teaching_state(args, chat_id, {"active": True, "tried": []})
+    return next_unknown_product(args, chat_id)
+
+
 def split_cupom_product(text):
     clean = " ".join(text.strip().split())
     match = re.match(r"^(\d{4,})\s+(.+)$", clean)
@@ -1156,6 +1273,8 @@ def handle_command(args, text):
         return dinheiro_summary(args)
     if cmd in ("/maisvendido", "/maisvendidos", "/topprodutos"):
         return top_products(args)
+    if cmd in ("/ensinar", "/aprendizado", "/comecar_aprendizado"):
+        return start_product_teaching(args, args.chat_id)
     if cmd in ("/ultimo", "/ultimocupom"):
         return latest_coupon(args)
     if cmd == "/cupom":
@@ -1184,6 +1303,7 @@ def normalize_button_text(text):
         "ultimo cupom": "/ultimo",
         "buscar produto": "/buscar",
         "foto produto": "/foto",
+        "ensinar produtos": "/ensinar",
         "produto mais vendido": "/maisvendido",
     }
     return mapping.get(clean.lower(), clean)
