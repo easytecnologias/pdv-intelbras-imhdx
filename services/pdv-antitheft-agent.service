@@ -1,0 +1,16 @@
+[Unit]
+Description=PDV Anti-theft Agent (YOLO)
+After=network-online.target pdv-learning-agent.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/pdv-antitheft-agent.env
+ExecStart=/usr/bin/python3.8 /opt/pdv-antitheft/pdv_antitheft_agent.py
+Restart=always
+RestartSec=10
+User=root
+WorkingDirectory=/opt/pdv-antitheft
+
+[Install]
+WantedBy=multi-user.target

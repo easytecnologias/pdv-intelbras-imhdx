@@ -1,0 +1,15 @@
+[Unit]
+Description=PDV Auto Trainer — executa todo dia às 09:00
+
+[Timer]
+# Roda às 09:00 (loja já aberta, movimento baixo, PDV ligado)
+# Roda a cada 4 horas enquanto o PDV estiver ligado
+OnCalendar=*:0/4
+# Se o PDV foi ligado e perdeu o horário, roda logo em seguida
+Persistent=true
+# Espera 5min depois de ligar antes de começar (sistema estabilizar)
+OnBootSec=5min
+Unit=pdv-auto-trainer.service
+
+[Install]
+WantedBy=timers.target

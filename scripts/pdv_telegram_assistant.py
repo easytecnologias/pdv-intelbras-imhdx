@@ -181,8 +181,8 @@ def main_keyboard():
             [{"text": "Status"}, {"text": "Data"}],
             [{"text": "Caixa"}, {"text": "Cupom"}],
             [{"text": "Ultimo cupom"}, {"text": "Buscar produto"}],
-            [{"text": "Foto produto"}, {"text": "Ensinar produtos"}],
-            [{"text": "Produto mais vendido"}],
+            [{"text": "Foto produto"}, {"text": "Produto mais vendido"}],
+            [{"text": "🧠 IA — O que aprendi"}],
         ],
         "resize_keyboard": True,
         "one_time_keyboard": False,
@@ -1384,6 +1384,175 @@ def help_text():
     return "Menu atualizado. Use os botoes fixos abaixo."
 
 
+# ─────────────────── IA / Aprendizado ────────────────────────────────────────
+
+def _ia_read_handoff():
+    path = Path("/var/log/pdv-learning-agent/knowledge/future_antitheft_handoff.json")
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _ia_read_shadow():
+    path = Path("/var/log/pdv-shadow-antitheft/summary.json")
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _ia_read_train_history():
+    path = Path("/var/log/pdv-antitheft/models/train_history.jsonl")
+    if not path.exists():
+        return []
+    records = []
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line:
+                records.append(json.loads(line))
+    except Exception:
+        pass
+    return records
+
+
+def _ia_count_alerts_today():
+    day = datetime.now().strftime("%Y%m%d")
+    path = Path("/var/log/pdv-antitheft/alerts/{}/alerts.jsonl".format(day))
+    if not path.exists():
+        return 0
+    try:
+        return sum(1 for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
+    except Exception:
+        return 0
+
+
+def _ia_count_images_today():
+    day = datetime.now().strftime("%Y%m%d")
+    img_dir = Path("/var/log/pdv-learning-agent/{}/images".format(day))
+    if not img_dir.exists():
+        return 0
+    return len(list(img_dir.glob("*.jpg")))
+
+
+def ia_resumo_text():
+    handoff = _ia_read_handoff()
+    shadow = _ia_read_shadow()
+    history = _ia_read_train_history()
+    alertas_hoje = _ia_count_alerts_today()
+    imagens_hoje = _ia_count_images_today()
+
+    total = handoff.get("total_samples", 0)
+    labels = handoff.get("labels", {})
+
+    label_icons = {
+        "venda_confirmada": "✅",
+        "movimento_sem_evento_pdv": "👁",
+        "consulta_preco": "💰",
+        "pagamento": "💳",
+        "cupom_aberto": "🧾",
+        "ambiente": "🌫",
+    }
+
+    linhas = ["🧠 *O que o modelo aprendeu até agora:*\n"]
+    linhas.append("📸 Imagens coletadas hoje: *{}*".format(imagens_hoje))
+    linhas.append("📚 Total de amostras: *{}*\n".format(total))
+
+    linhas.append("*Categorias aprendidas:*")
+    for label, info in sorted(labels.items(), key=lambda x: -x[1].get("samples", 0)):
+        icon = label_icons.get(label, "•")
+        n = info.get("samples", 0)
+        linhas.append("{} {}: *{}* amostras".format(icon, label.replace("_", " "), n))
+
+    linhas.append("")
+    obs = shadow.get("total_observations", 0)
+    rev = shadow.get("review_candidates", 0)
+    pct = round(rev / obs * 100, 1) if obs else 0
+    linhas.append("👁 Observações analisadas: *{}*".format(obs))
+    linhas.append("🔍 Suspeitos para revisão: *{}* ({}%)".format(rev, pct))
+    linhas.append("🚨 Alertas hoje: *{}*".format(alertas_hoje))
+
+    treinos = [h for h in history if h.get("action") == "trained"]
+    if treinos:
+        ultimo = treinos[-1]
+        linhas.append("")
+        linhas.append("*Último treino:*")
+        linhas.append("📅 {}".format(ultimo.get("time", "?")))
+        linhas.append("🎯 mAP50: *{:.3f}*".format(ultimo.get("new_map", 0)))
+        linhas.append("🔢 Amostras usadas: *{}*".format(ultimo.get("total_samples", 0)))
+        deployed = "✅ Sim" if ultimo.get("deployed") else "⏳ Aguardando melhora"
+        linhas.append("🚀 Modelo em produção: {}".format(deployed))
+    else:
+        linhas.append("")
+        linhas.append("⏳ Nenhum treino completo ainda (roda às 09:00)")
+
+    return "\n".join(linhas)
+
+
+def ia_alertas_text():
+    day = datetime.now().strftime("%Y%m%d")
+    path = Path("/var/log/pdv-antitheft/alerts/{}/alerts.jsonl".format(day))
+    if not path.exists():
+        return "🟢 Nenhum alerta hoje."
+    try:
+        records = [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
+    except Exception:
+        return "Erro ao ler alertas."
+    if not records:
+        return "🟢 Nenhum alerta hoje."
+    linhas = ["🚨 *Alertas de hoje ({} total):*\n".format(len(records))]
+    for r in records[-10:]:
+        hora = r.get("time", "?")[-8:]
+        motivo = r.get("motivo_llava") or r.get("tipo", "?")
+        dets = r.get("deteccoes") or []
+        det_str = ", ".join("{} {:.0f}%".format(d["label"], d["conf"]*100) for d in dets[:2])
+        linhas.append("🕐 {} — {}\n   _{}_".format(hora, motivo[:60], det_str))
+    return "\n".join(linhas)
+
+
+def ia_treinos_text():
+    history = _ia_read_train_history()
+    if not history:
+        return "⏳ Nenhum treino realizado ainda.\nPrimeiro treino ocorre às 09:00 do próximo dia."
+    linhas = ["📈 *Histórico de treinos:*\n"]
+    for h in reversed(history[-8:]):
+        if h.get("action") == "skipped":
+            linhas.append("⏭ {} — pulado ({})".format(
+                h.get("time", "?")[:16], h.get("reason", "")[:40]))
+        elif h.get("action") == "trained":
+            deployed = "✅" if h.get("deployed") else "↩️"
+            linhas.append("{} {} — mAP *{:.3f}* | {} amostras".format(
+                deployed, h.get("time", "?")[:16],
+                h.get("new_map", 0), h.get("total_samples", 0)))
+        elif h.get("action") == "failed":
+            linhas.append("❌ {} — falhou em {}".format(
+                h.get("time", "?")[:16], h.get("step", "?")))
+    return "\n".join(linhas)
+
+
+def ia_keyboard():
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "📊 Resumo", "callback_data": "ia:resumo"},
+                {"text": "🚨 Alertas", "callback_data": "ia:alertas"},
+            ],
+            [
+                {"text": "📈 Treinos", "callback_data": "ia:treinos"},
+                {"text": "🔄 Atualizar", "callback_data": "ia:resumo"},
+            ],
+        ]
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+
 def handle_command(args, text):
     text = normalize_button_text(text)
     parts = text.strip().split(maxsplit=1)
@@ -1391,6 +1560,8 @@ def handle_command(args, text):
     rest = parts[1].strip() if len(parts) > 1 else ""
     if cmd in ("/ajuda", "/help", "/start", "/menu"):
         return help_text()
+    if cmd in ("/ia", "/modelo", "/antifurto", "/oque aprendeu"):
+        return {"text": ia_resumo_text(), "reply_markup": ia_keyboard()}
     if cmd == "/status":
         return status(args)
     if cmd == "/data":
@@ -1437,6 +1608,12 @@ def normalize_button_text(text):
         "foto produto": "/foto",
         "ensinar produtos": "/ensinar",
         "produto mais vendido": "/maisvendido",
+        "ia": "/ia",
+        "modelo": "/ia",
+        "antifurto": "/ia",
+        "o que aprendeu": "/ia",
+        "🧠 ia — o que aprendi": "/ia",
+        "ia — o que aprendi": "/ia",
     }
     return mapping.get(clean.lower(), clean)
 
@@ -1552,6 +1729,19 @@ def handle_callback(args, callback):
         result = learn_product_from_answer(args, chat_id, category)
         if result:
             send_response(args, result)
+        return
+    if data.startswith("ia:"):
+        acao = data.split(":", 1)[1]
+        if acao == "resumo":
+            text = ia_resumo_text()
+        elif acao == "alertas":
+            text = ia_alertas_text()
+        elif acao == "treinos":
+            text = ia_treinos_text()
+        else:
+            text = ia_resumo_text()
+        edit_message(args, chat_id, message_id, text, ia_keyboard())
+        answer_callback(args, callback_id)
         return
     answer_callback(args, callback_id)
 
