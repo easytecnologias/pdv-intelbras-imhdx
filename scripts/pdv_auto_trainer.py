@@ -45,7 +45,7 @@ PYTHON          = os.environ.get("AUTO_TRAINER_PYTHON",      "/usr/bin/python3.8
 SCRIPT_DIR      = os.environ.get("AUTO_TRAINER_SCRIPT_DIR",  "/opt/pdv-antitheft")
 MIN_SAMPLES     = int(os.environ.get("AUTO_TRAINER_MIN_SAMPLES",   "300"))
 DATASET_DAYS    = int(os.environ.get("AUTO_TRAINER_DATASET_DAYS",  "7"))
-EPOCHS          = int(os.environ.get("AUTO_TRAINER_EPOCHS",        "40"))
+EPOCHS          = int(os.environ.get("AUTO_TRAINER_EPOCHS",        "15"))
 DEVICE          = os.environ.get("YOLO_DEVICE", "cpu")
 ANTITHEFT_SVC   = os.environ.get("AUTO_TRAINER_SERVICE", "pdv-antitheft-agent.service")
 
@@ -231,7 +231,8 @@ def train_cycle():
         "--outdir", TRAINER_DIR,
         "--epochs", str(EPOCHS),
         "--device", DEVICE,
-        "--batch", "4",  # batch menor para caber na RAM (7.4GB com outros servicos)
+        "--batch", "8",   # com imgsz=320 cabe na RAM
+        "--imgsz", "320", # 4x mais rapido que 640 no CPU
     ], timeout=7200)
 
     if not ok:

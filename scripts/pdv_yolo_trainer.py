@@ -35,7 +35,7 @@ def parse_args():
     p.add_argument("--outdir", default=os.environ.get("TRAINER_OUTDIR", "/var/log/pdv-antitheft/models"))
     p.add_argument("--epochs", type=int, default=int(os.environ.get("TRAINER_EPOCHS", "40")))
     p.add_argument("--batch", type=int, default=int(os.environ.get("TRAINER_BATCH", "8")))
-    p.add_argument("--imgsz", type=int, default=int(os.environ.get("TRAINER_IMGSZ", "640")))
+    p.add_argument("--imgsz", type=int, default=int(os.environ.get("TRAINER_IMGSZ", "320")))
     p.add_argument("--device", default=os.environ.get("YOLO_DEVICE", "cpu"))
     p.add_argument("--patience", type=int, default=int(os.environ.get("TRAINER_PATIENCE", "10")))
     p.add_argument("--watch", action="store_true")
