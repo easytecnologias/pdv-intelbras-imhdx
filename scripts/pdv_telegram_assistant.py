@@ -1550,6 +1550,45 @@ def ia_keyboard():
     }
 
 
+def _find_alert(alert_id):
+    """Procura um alerta pelo ID nos últimos 2 dias de logs."""
+    root = Path("/var/log/pdv-antitheft/alerts")
+    if not root.exists():
+        return None
+    for day_dir in sorted(root.iterdir(), reverse=True)[:2]:
+        path = day_dir / "alerts.jsonl"
+        if not path.exists():
+            continue
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                d = json.loads(line)
+                if d.get("alert_id") == alert_id:
+                    return d
+            except Exception:
+                pass
+    return None
+
+
+def _save_alert_feedback(alert_id, confirmed):
+    """Salva feedback do usuário e grava em feedback/confirmed.jsonl ou dismissed.jsonl."""
+    alert = _find_alert(alert_id)
+    feedback_dir = Path("/var/log/pdv-antitheft/feedback")
+    feedback_dir.mkdir(parents=True, exist_ok=True)
+    fname = "confirmed.jsonl" if confirmed else "dismissed.jsonl"
+    record = {
+        "alert_id": alert_id,
+        "feedback_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "confirmed": confirmed,
+        "image": alert.get("image") if alert else None,
+        "motivo": alert.get("motivo_llava") if alert else None,
+        "pdv": alert.get("pdv") if alert else None,
+    }
+    with (feedback_dir / fname).open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+    print("FEEDBACK {} alert_id={}".format("CONFIRMADO" if confirmed else "DESCARTADO", alert_id),
+          flush=True)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -1742,6 +1781,16 @@ def handle_callback(args, callback):
             text = ia_resumo_text()
         edit_message(args, chat_id, message_id, text, ia_keyboard())
         answer_callback(args, callback_id)
+        return
+    if data.startswith("atf_ok:") or data.startswith("atf_no:"):
+        confirmed = data.startswith("atf_ok:")
+        alert_id = data.split(":", 1)[1]
+        _save_alert_feedback(alert_id, confirmed)
+        label = "FRAUDE CONFIRMADA" if confirmed else "FALSO POSITIVO"
+        icon  = "✅" if confirmed else "❌"
+        answer_callback(args, callback_id, "{} {}".format(icon, label))
+        edit_message(args, chat_id, message_id,
+                     "{} {} — obrigado! Isso vai melhorar o modelo.".format(icon, label))
         return
     answer_callback(args, callback_id)
 

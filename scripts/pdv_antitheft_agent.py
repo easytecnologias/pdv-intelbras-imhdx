@@ -244,17 +244,24 @@ def draw_alert(jpeg, detections, motivo):
     return buf.getvalue()
 
 
-def telegram_send_photo(token, chat_id, jpeg, caption):
+def telegram_send_photo(token, chat_id, jpeg, caption, alert_id=None):
     if not token or not chat_id:
         return
     url = "https://api.telegram.org/bot{}/sendPhoto".format(token)
+    reply_markup = None
+    if alert_id:
+        reply_markup = json.dumps({
+            "inline_keyboard": [[
+                {"text": "✅ Fraude real",       "callback_data": "atf_ok:{}".format(alert_id)},
+                {"text": "❌ Falso positivo",    "callback_data": "atf_no:{}".format(alert_id)},
+            ]]
+        })
+    data = {"chat_id": chat_id, "caption": caption[:1024], "parse_mode": "Markdown"}
+    if reply_markup:
+        data["reply_markup"] = reply_markup
     try:
-        r = requests.post(
-            url,
-            data={"chat_id": chat_id, "caption": caption[:1024], "parse_mode": "Markdown"},
-            files={"photo": ("alerta.jpg", jpeg, "image/jpeg")},
-            timeout=20,
-        )
+        r = requests.post(url, data=data,
+                          files={"photo": ("alerta.jpg", jpeg, "image/jpeg")}, timeout=20)
         if not r.ok:
             log("TELEGRAM_ERRO: {} {}".format(r.status_code, r.text[:100]))
     except Exception as exc:
@@ -352,6 +359,9 @@ def run(args):
 
         annotated = draw_alert(jpeg, detections, motivo)
 
+        stamp = now.strftime("%Y%m%d_%H%M%S")
+        alert_id = "{}_{}_{}".format(args.pdv_station, stamp, now.microsecond // 1000)
+
         caption = (
             "*POSSIVEL FRAUDE — PDV {}*\n"
             "Hora: {}\n"
@@ -360,9 +370,9 @@ def run(args):
             "_Verifique o video no iMHDX_"
         ).format(args.pdv_station, now.strftime("%H:%M:%S"), det_str, motivo)
 
-        telegram_send_photo(args.telegram_token, args.telegram_chat_id, annotated, caption)
+        telegram_send_photo(args.telegram_token, args.telegram_chat_id, annotated, caption,
+                            alert_id=alert_id)
 
-        stamp = now.strftime("%Y%m%d_%H%M%S")
         img_path = None
         try:
             img_path = Path(args.outdir) / now.strftime("%Y%m%d") / "alert_{}.jpg".format(stamp)
@@ -372,12 +382,14 @@ def run(args):
             log("ERRO salvando imagem: {}".format(exc))
 
         save_alert(args.outdir, {
+            "alert_id": alert_id,
             "time": now.strftime("%Y-%m-%d %H:%M:%S"),
             "pdv": args.pdv_station,
             "tipo": "produto_sem_scan",
             "motivo_llava": motivo,
             "deteccoes": detections,
             "image": str(img_path) if img_path else None,
+            "feedback": None,
         })
 
         elapsed = time.time() - loop_start

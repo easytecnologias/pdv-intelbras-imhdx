@@ -173,12 +173,38 @@ def write_data_yaml(outdir, class_names):
     log("data.yaml gravado em {}".format(outdir))
 
 
+def load_feedback_samples(feedback_dir="/var/log/pdv-antitheft/feedback"):
+    """Carrega imagens confirmadas como fraude e descartadas como falso positivo."""
+    root = Path(feedback_dir)
+    confirmed = []  # (image_path, "feedback_confirmado")
+    dismissed = []  # (image_path, "")
+    for fname, bucket in [("confirmed.jsonl", confirmed), ("dismissed.jsonl", dismissed)]:
+        path = root / fname
+        if not path.exists():
+            continue
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                d = json.loads(line)
+                img = d.get("image")
+                if img and Path(img).exists():
+                    bucket.append((img, d.get("motivo", "feedback")))
+            except Exception:
+                pass
+    log("feedback: {} confirmados, {} falsos positivos".format(len(confirmed), len(dismissed)))
+    return confirmed, dismissed
+
+
 def build(args):
     outdir = Path(args.outdir)
     train_dir = outdir / "train"
     val_dir = outdir / "val"
 
     positives, negatives = collect_samples(args.learning_dir, args.days)
+
+    # Adiciona feedback humano — confirmados como positivos extras, descartados como negativos
+    feedback_confirmed, feedback_dismissed = load_feedback_samples()
+    positives = positives + feedback_confirmed * 5  # peso 5x (humano > automático)
+    negatives = negatives + feedback_dismissed * 5
 
     random.shuffle(positives)
     random.shuffle(negatives)
