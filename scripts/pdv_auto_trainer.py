@@ -146,13 +146,19 @@ def extract_map_from_metrics(trainer_dir):
     return 0.0
 
 
+def stop_antitheft():
+    """Para o agente antifurto para liberar RAM durante o treino (~1.3GB do BLIP)."""
+    try:
+        subprocess.run(["systemctl", "stop", ANTITHEFT_SVC], timeout=15, capture_output=True)
+        log("servico {} parado para liberar RAM".format(ANTITHEFT_SVC))
+    except Exception as exc:
+        log("aviso: nao conseguiu parar servico: {}".format(exc))
+
+
 def restart_antitheft():
     """Reinicia o agente antifurto para carregar novo modelo."""
     try:
-        subprocess.run(
-            ["systemctl", "restart", ANTITHEFT_SVC],
-            timeout=15, capture_output=True
-        )
+        subprocess.run(["systemctl", "restart", ANTITHEFT_SVC], timeout=15, capture_output=True)
         log("servico {} reiniciado com novo modelo".format(ANTITHEFT_SVC))
     except Exception as exc:
         log("aviso: nao conseguiu reiniciar servico: {}".format(exc))
@@ -194,6 +200,9 @@ def train_cycle():
     log("iniciando pipeline de treino ({} novas amostras)...".format(
         new_samples if state.get("train_count", 0) > 0 else total_samples))
 
+    # Para o antitheft para liberar ~1.3GB de RAM do BLIP durante o treino
+    stop_antitheft()
+
     # ── 2) Construir dataset ──────────────────────────────────────────────────
     # Limita a 400 imagens por classe para o dataset_builder ser viável no CPU
     # (~400 imagens × 1s = ~7min). O modelo aprende bem com menos imagens de qualidade.
@@ -222,7 +231,7 @@ def train_cycle():
         "--outdir", TRAINER_DIR,
         "--epochs", str(EPOCHS),
         "--device", DEVICE,
-        "--batch", "8",
+        "--batch", "4",  # batch menor para caber na RAM (7.4GB com outros servicos)
     ], timeout=7200)
 
     if not ok:
