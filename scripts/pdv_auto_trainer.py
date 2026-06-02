@@ -195,6 +195,9 @@ def train_cycle():
         new_samples if state.get("train_count", 0) > 0 else total_samples))
 
     # ── 2) Construir dataset ──────────────────────────────────────────────────
+    # Limita a 400 imagens por classe para o dataset_builder ser viável no CPU
+    # (~400 imagens × 1s = ~7min). O modelo aprende bem com menos imagens de qualidade.
+    max_per_class = int(os.environ.get("DATASET_MAX_PER_CLASS", "400"))
     ok, out = run_step("dataset_builder", [
         PYTHON,
         str(Path(SCRIPT_DIR) / "pdv_dataset_builder.py"),
@@ -202,9 +205,9 @@ def train_cycle():
         "--outdir", DATASET_DIR,
         "--model", YOLO_MODEL,
         "--days", str(DATASET_DAYS),
-        "--max-per-class", "2000",
+        "--max-per-class", str(max_per_class),
         "--device", DEVICE,
-    ], timeout=3600)
+    ], timeout=7200)
 
     if not ok:
         append_history({"time": now.strftime("%Y-%m-%d %H:%M:%S"), "action": "failed", "step": "dataset"})
