@@ -203,6 +203,14 @@ def train_cycle():
     # Para o antitheft para liberar ~1.3GB de RAM do BLIP durante o treino
     stop_antitheft()
 
+    try:
+        _run_training(state, now, total_samples, new_samples)
+    finally:
+        # Garante que o antitheft SEMPRE reinicia, mesmo se o treino falhar
+        restart_antitheft()
+
+
+def _run_training(state, now, total_samples, new_samples):
     # ── 2) Construir dataset ──────────────────────────────────────────────────
     # Limita a 400 imagens por classe para o dataset_builder ser viável no CPU
     # (~400 imagens × 1s = ~7min). O modelo aprende bem com menos imagens de qualidade.
@@ -252,7 +260,6 @@ def train_cycle():
             shutil.copy2(PROD_MODEL, PREV_MODEL)
 
         log("DEPLOY: modelo novo aceito (mAP {:.4f} >= {:.4f})".format(new_map, prev_map))
-        restart_antitheft()
         deployed = True
         state["best_map"] = max(new_map, prev_map)
     else:
