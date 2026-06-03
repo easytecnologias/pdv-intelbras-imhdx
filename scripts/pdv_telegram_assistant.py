@@ -1550,6 +1550,100 @@ def ia_keyboard():
     }
 
 
+def _send_alert_video(args, chat_id, alert_id):
+    """Baixa 15s de video do iMHDX no momento do alerta e envia no Telegram."""
+    import subprocess, tempfile, os
+    from urllib.parse import quote
+
+    alert = _find_alert(alert_id)
+    if not alert:
+        api(args, "sendMessage", data={"chat_id": chat_id,
+            "text": "Alerta nao encontrado. Pode ter expirado."})
+        return
+
+    if not args.imhdx_host or not args.imhdx_user or not args.imhdx_pass:
+        api(args, "sendMessage", data={"chat_id": chat_id,
+            "text": "iMHDX nao configurado neste PDV."})
+        return
+
+    # Determinar canal pelo numero do PDV
+    pdv = alert.get("pdv", "001")
+    try:
+        canal = int(pdv.lstrip("0") or "1")
+    except Exception:
+        canal = 1
+
+    # Janela de -5s a +15s em volta do alerta
+    try:
+        alerta_dt = datetime.strptime(alert.get("time", ""), "%Y-%m-%d %H:%M:%S")
+    except Exception:
+        api(args, "sendMessage", data={"chat_id": chat_id, "text": "Hora do alerta invalida."})
+        return
+
+    inicio = alerta_dt - timedelta(seconds=5)
+    fim    = alerta_dt + timedelta(seconds=15)
+    start_str = quote(inicio.strftime("%Y-%m-%d %H:%M:%S"))
+    end_str   = quote(fim.strftime("%Y-%m-%d %H:%M:%S"))
+
+    url = "http://{host}/cgi-bin/loadfile.cgi?action=startLoad&channel={ch}&startTime={s}&endTime={e}".format(
+        host=args.imhdx_host, ch=canal, s=start_str, e=end_str)
+
+    tmp_dir = tempfile.mkdtemp()
+    dav_path = os.path.join(tmp_dir, "clip.dav")
+    mp4_path = os.path.join(tmp_dir, "clip.mp4")
+
+    try:
+        # Baixar .dav do iMHDX
+        r = requests.get(url, auth=HTTPDigestAuth(args.imhdx_user, args.imhdx_pass), timeout=30)
+        if r.status_code != 200 or len(r.content) < 2048:
+            api(args, "sendMessage", data={"chat_id": chat_id,
+                "text": "Gravacao nao encontrada no iMHDX para este horario.\n"
+                        "Caixa {}, {}".format(pdv, alerta_dt.strftime("%H:%M:%S"))})
+            return
+        with open(dav_path, "wb") as f:
+            f.write(r.content)
+
+        # Converter .dav para .mp4 com ffmpeg
+        result = subprocess.run(
+            ["ffmpeg", "-y", "-i", dav_path, "-t", "20",
+             "-vf", "scale=640:-2",
+             "-c:v", "libx264", "-preset", "fast", "-crf", "28",
+             "-an", mp4_path],
+            capture_output=True, timeout=60
+        )
+        if result.returncode != 0 or not os.path.exists(mp4_path):
+            api(args, "sendMessage", data={"chat_id": chat_id,
+                "text": "Erro ao converter video. Tente ver diretamente no iMHDX."})
+            return
+
+        # Enviar video
+        caption = "Caixa {} - {} (20s antes/depois do alerta)".format(
+            pdv, alerta_dt.strftime("%H:%M:%S"))
+        with open(mp4_path, "rb") as vf:
+            api(args, "sendVideo",
+                data={"chat_id": chat_id, "caption": caption,
+                      "reply_markup": json.dumps({
+                          "inline_keyboard": [[
+                              {"text": "Fraude real",    "callback_data": "atf_ok:{}".format(alert_id)},
+                              {"text": "Falso positivo", "callback_data": "atf_no:{}".format(alert_id)},
+                          ]]
+                      })},
+                files={"video": ("clip.mp4", vf, "video/mp4")})
+        print("ALERT_VIDEO_SENT alert_id={} canal={}".format(alert_id, canal), flush=True)
+
+    except Exception as exc:
+        print("ALERT_VIDEO_ERRO: {}".format(exc), flush=True)
+        api(args, "sendMessage", data={"chat_id": chat_id,
+            "text": "Erro ao buscar video: {}. Verifique no iMHDX.".format(str(exc)[:80])})
+    finally:
+        try:
+            if os.path.exists(dav_path): os.unlink(dav_path)
+            if os.path.exists(mp4_path): os.unlink(mp4_path)
+            os.rmdir(tmp_dir)
+        except Exception:
+            pass
+
+
 def _find_alert(alert_id):
     """Procura um alerta pelo ID nos últimos 2 dias de logs."""
     root = Path("/var/log/pdv-antitheft/alerts")
@@ -1781,6 +1875,11 @@ def handle_callback(args, callback):
             text = ia_resumo_text()
         edit_message(args, chat_id, message_id, text, ia_keyboard())
         answer_callback(args, callback_id)
+        return
+    if data.startswith("atf_video:"):
+        alert_id = data.split(":", 1)[1]
+        answer_callback(args, callback_id, "Baixando video, aguarde...")
+        _send_alert_video(args, chat_id, alert_id)
         return
     if data.startswith("atf_ok:") or data.startswith("atf_no:"):
         confirmed = data.startswith("atf_ok:")

@@ -254,10 +254,15 @@ def telegram_send_photo(token, chat_id, jpeg, caption, alert_id=None):
     reply_markup = None
     if alert_id:
         reply_markup = json.dumps({
-            "inline_keyboard": [[
-                {"text": "✅ Fraude real",       "callback_data": "atf_ok:{}".format(alert_id)},
-                {"text": "❌ Falso positivo",    "callback_data": "atf_no:{}".format(alert_id)},
-            ]]
+            "inline_keyboard": [
+                [
+                    {"text": "✅ Fraude real",    "callback_data": "atf_ok:{}".format(alert_id)},
+                    {"text": "❌ Falso positivo", "callback_data": "atf_no:{}".format(alert_id)},
+                ],
+                [
+                    {"text": "📹 Ver video (15s)", "callback_data": "atf_video:{}".format(alert_id)},
+                ],
+            ]
         })
     data = {"chat_id": chat_id, "caption": caption[:1024], "parse_mode": "Markdown"}
     if reply_markup:
