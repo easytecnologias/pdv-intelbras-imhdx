@@ -45,6 +45,10 @@ def parse_args():
     p.add_argument("--max-per-class", type=int, default=int(os.environ.get("DATASET_MAX_PER_CLASS", "2000")))
     p.add_argument("--val-split", type=float, default=float(os.environ.get("DATASET_VAL_SPLIT", "0.2")))
     p.add_argument("--dry-run", action="store_true")
+    # Pular YOLO-World e usar bbox full-frame para todas as positivas (muito mais rápido)
+    p.add_argument("--skip-labeling", action="store_true",
+                   default=os.environ.get("DATASET_SKIP_LABELING", "1") == "1")
+    p.add_argument("--no-skip-labeling", dest="skip_labeling", action="store_false")
     return p.parse_args()
 
 
@@ -215,27 +219,33 @@ def build(args):
         log("DRY RUN — {} positivos, {} negativos selecionados".format(len(positives), len(negatives)))
         return
 
-    model = load_yolo_world(args.model, args.device)
-
     stats = {"positivos_com_bbox": 0, "positivos_sem_bbox": 0, "negativos": 0, "erros": 0}
-    all_samples = []  # (image_path, yolo_labels)
+    all_samples = []
 
-    log("auto-labelando {} positivos...".format(len(positives)))
-    for idx, (img_path, produto) in enumerate(positives):
-        if idx % 100 == 0:
-            log("  {}/{}".format(idx, len(positives)))
-        try:
-            labels = auto_label(model, img_path, args.conf, args.device)
-            if labels:
-                stats["positivos_com_bbox"] += 1
-            else:
-                # Sem detecção: adiciona bbox full-frame como fallback
-                labels = [(0, 0.5, 0.5, 0.9, 0.9)]
-                stats["positivos_sem_bbox"] += 1
-            all_samples.append((img_path, labels, "pos"))
-        except Exception as exc:
-            stats["erros"] += 1
-            log("  ERRO {}: {}".format(img_path, exc))
+    if args.skip_labeling:
+        # Modo rápido: bbox full-frame para todas as positivas (segundos, não horas)
+        # YOLO-World estava detectando 0/400 = 0% de acerto, então não há perda de qualidade
+        log("skip-labeling ativo: usando bbox full-frame para {} positivos (~1min)".format(len(positives)))
+        for img_path, _ in positives:
+            all_samples.append((img_path, [(0, 0.5, 0.5, 0.9, 0.9)], "pos"))
+            stats["positivos_sem_bbox"] += 1
+    else:
+        model = load_yolo_world(args.model, args.device)
+        log("auto-labelando {} positivos com YOLO-World...".format(len(positives)))
+        for idx, (img_path, produto) in enumerate(positives):
+            if idx % 100 == 0:
+                log("  {}/{}".format(idx, len(positives)))
+            try:
+                labels = auto_label(model, img_path, args.conf, args.device)
+                if labels:
+                    stats["positivos_com_bbox"] += 1
+                else:
+                    labels = [(0, 0.5, 0.5, 0.9, 0.9)]
+                    stats["positivos_sem_bbox"] += 1
+                all_samples.append((img_path, labels, "pos"))
+            except Exception as exc:
+                stats["erros"] += 1
+                log("  ERRO {}: {}".format(img_path, exc))
 
     log("adicionando {} negativos...".format(len(negatives)))
     for img_path, _ in negatives:
