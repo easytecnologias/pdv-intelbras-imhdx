@@ -5,13 +5,11 @@ After=network-online.target pdv-learning-agent.service
 [Service]
 Type=oneshot
 EnvironmentFile=/etc/pdv-antitheft-agent.env
-# nice 10 = prioridade baixa mas funcional (cede para o caixa sem travar)
-ExecStart=/usr/bin/nice -n 10 /usr/bin/python3.8 /opt/pdv-antitheft/pdv_auto_trainer.py
+ExecStart=/usr/bin/python3.8 /opt/pdv-antitheft/pdv_auto_trainer.py
 User=root
 WorkingDirectory=/opt/pdv-antitheft
 StandardOutput=journal
 StandardError=journal
-MemoryLimit=3G
 TimeoutStartSec=18000
 
 [Install]

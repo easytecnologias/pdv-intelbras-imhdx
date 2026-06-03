@@ -31,8 +31,6 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-# Garante prioridade mínima mesmo se chamado fora do systemd
-os.nice(19)
 
 
 # ── Configuração ──────────────────────────────────────────────────────────────
