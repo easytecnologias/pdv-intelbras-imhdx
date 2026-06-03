@@ -41,11 +41,14 @@ SPY_RE = re.compile(r"^(?P<time>\d{2}:\d{2}:\d{2}):(?P<text>.+)$")
 VIT_RE = re.compile(r"Descricao:\s*([^|]+)")
 PRICE_RE = re.compile(r"VlTotal:\s*([\d.,]+)")
 
-# Perguntas para BLIP-VQA (respostas: yes/no)
+# Perguntas para BLIP-VQA em inglês (modelo responde melhor) + tradução amigável
 QUESTIONS_VQA = [
-    "is someone holding a product without scanning it",
-    "is a hand covering the barcode scanner",
-    "is there a product visible near the cashier",
+    ("is someone holding a product without scanning it",
+     "produto segurado sem passar no scanner"),
+    ("is a hand covering the barcode scanner",
+     "mao cobrindo o leitor de codigo"),
+    ("is there a product visible near the cashier",
+     "produto visivel perto do caixa"),
 ]
 
 
@@ -201,23 +204,23 @@ def vision_analyze(jpeg, args):
         import torch
         img = Image.open(BytesIO(jpeg)).convert("RGB")
         respostas = []
-        for pergunta in QUESTIONS_VQA:
-            inputs = _blip_processor(img, pergunta, return_tensors="pt")
+        for pergunta_en, descricao_pt in QUESTIONS_VQA:
+            inputs = _blip_processor(img, pergunta_en, return_tensors="pt")
             with torch.no_grad():
                 out = _blip_model.generate(**inputs, max_new_tokens=5)
             resposta = _blip_processor.decode(out[0], skip_special_tokens=True).strip().lower()
-            respostas.append((pergunta, resposta))
-            log("VISION_QA: '{}' → '{}'".format(pergunta[:40], resposta))
+            respostas.append((descricao_pt, resposta))
+            log("VISION_QA: '{}' -> '{}'".format(descricao_pt[:40], resposta))
     except Exception as exc:
         log("VISION_ERRO: {}".format(exc))
         return True, "erro na analise visual"
 
     # Suspeito se qualquer pergunta retornar "yes"
-    motivos = [q[:35] for q, r in respostas if "yes" in r]
-    suspeito = bool(motivos)
-    motivo = " | ".join(motivos) if motivos else "BLIP: sem evidencia"
+    motivos_pt = [desc for desc, r in respostas if "yes" in r]
+    suspeito = bool(motivos_pt)
+    motivo = " e ".join(motivos_pt) if motivos_pt else "sem evidencia clara"
 
-    log("VISION: {} — {}".format("SUSPEITO" if suspeito else "NORMAL", motivo))
+    log("VISION: {} - {}".format("SUSPEITO" if suspeito else "NORMAL", motivo))
     return suspeito, motivo
 
 
@@ -357,18 +360,24 @@ def run(args):
         # ── Dispara alerta ────────────────────────────────────────────────────
         log("ALERTA CONFIRMADO: {}".format(motivo))
 
-        annotated = draw_alert(jpeg, detections, motivo)
+        motivo_curto = motivo[:60] if motivo else "suspeito"
+        annotated = draw_alert(jpeg, detections, "Caixa {} - {}".format(args.pdv_station, motivo_curto))
 
         stamp = now.strftime("%Y%m%d_%H%M%S")
         alert_id = "{}_{}_{}".format(args.pdv_station, stamp, now.microsecond // 1000)
 
         caption = (
-            "*POSSIVEL FRAUDE — PDV {}*\n"
-            "Hora: {}\n"
-            "Detectado: {}\n"
-            "IA diz: {}\n"
-            "_Verifique o video no iMHDX_"
-        ).format(args.pdv_station, now.strftime("%H:%M:%S"), det_str, motivo)
+            "Caixa {pdv} - {hora}\n\n"
+            "A camera identificou uma situacao suspeita:\n"
+            "{motivo}\n\n"
+            "Confianca da deteccao: {conf}\n\n"
+            "Verifique o video no iMHDX e confirme abaixo:"
+        ).format(
+            pdv=args.pdv_station,
+            hora=now.strftime("%H:%M:%S"),
+            motivo=motivo.capitalize(),
+            conf=det_str,
+        )
 
         telegram_send_photo(args.telegram_token, args.telegram_chat_id, annotated, caption,
                             alert_id=alert_id)
