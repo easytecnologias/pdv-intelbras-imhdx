@@ -223,11 +223,13 @@ def build(args):
     all_samples = []
 
     if args.skip_labeling:
-        # Modo rápido: bbox full-frame para todas as positivas (segundos, não horas)
-        # YOLO-World estava detectando 0/400 = 0% de acerto, então não há perda de qualidade
-        log("skip-labeling ativo: usando bbox full-frame para {} positivos (~1min)".format(len(positives)))
+        # Bbox focado na área do scanner (centro-inferior da imagem)
+        # Evita que o modelo aprenda objetos de fundo (banners, displays)
+        # cx=0.55 cy=0.55 w=0.5 h=0.45 → foca na metade central-inferior
+        SCANNER_BBOX = (0, 0.55, 0.55, 0.50, 0.45)
+        log("skip-labeling: bbox scanner para {} positivos".format(len(positives)))
         for img_path, _ in positives:
-            all_samples.append((img_path, [(0, 0.5, 0.5, 0.9, 0.9)], "pos"))
+            all_samples.append((img_path, [SCANNER_BBOX], "pos"))
             stats["positivos_sem_bbox"] += 1
     else:
         model = load_yolo_world(args.model, args.device)

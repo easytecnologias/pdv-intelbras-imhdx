@@ -215,9 +215,10 @@ def vision_analyze(jpeg, args):
         log("VISION_ERRO: {}".format(exc))
         return True, "erro na analise visual"
 
-    # Suspeito se qualquer pergunta retornar "yes"
+    # Suspeito apenas se PELO MENOS 2 de 3 perguntas retornarem "yes"
+    # 1/3 gera muito falso positivo (BLIP é genérico demais com baixo threshold)
     motivos_pt = [desc for desc, r in respostas if "yes" in r]
-    suspeito = bool(motivos_pt)
+    suspeito = len(motivos_pt) >= 2
     motivo = " e ".join(motivos_pt) if motivos_pt else "sem evidencia clara"
 
     log("VISION: {} - {}".format("SUSPEITO" if suspeito else "NORMAL", motivo))
