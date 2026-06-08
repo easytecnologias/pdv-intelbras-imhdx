@@ -178,11 +178,10 @@ def send_response(args, response):
 def main_keyboard():
     return {
         "keyboard": [
-            [{"text": "Status"}, {"text": "Data"}],
-            [{"text": "Caixa"}, {"text": "Cupom"}],
-            [{"text": "Ultimo cupom"}, {"text": "Buscar produto"}],
-            [{"text": "Foto produto"}, {"text": "Produto mais vendido"}],
-            [{"text": "🧠 IA — O que aprendi"}],
+            [{"text": "Status"}, {"text": "Caixa"}],
+            [{"text": "Cupom"}, {"text": "Ultimo cupom"}],
+            [{"text": "Buscar produto"}, {"text": "Foto produto"}],
+            [{"text": "Produto mais vendido"}, {"text": "Data"}],
         ],
         "resize_keyboard": True,
         "one_time_keyboard": False,
@@ -1694,7 +1693,7 @@ def handle_command(args, text):
     if cmd in ("/ajuda", "/help", "/start", "/menu"):
         return help_text()
     if cmd in ("/ia", "/modelo", "/antifurto", "/oque aprendeu"):
-        return {"text": ia_resumo_text(), "reply_markup": ia_keyboard()}
+        return "O modulo antifurto foi removido. Use os botoes de consulta do caixa."
     if cmd == "/status":
         return status(args)
     if cmd == "/data":
@@ -1745,8 +1744,6 @@ def normalize_button_text(text):
         "modelo": "/ia",
         "antifurto": "/ia",
         "o que aprendeu": "/ia",
-        "🧠 ia — o que aprendi": "/ia",
-        "ia — o que aprendi": "/ia",
     }
     return mapping.get(clean.lower(), clean)
 
@@ -1877,19 +1874,10 @@ def handle_callback(args, callback):
         answer_callback(args, callback_id)
         return
     if data.startswith("atf_video:"):
-        alert_id = data.split(":", 1)[1]
-        answer_callback(args, callback_id, "Baixando video, aguarde...")
-        _send_alert_video(args, chat_id, alert_id)
+        answer_callback(args, callback_id, "Modulo antifurto removido.")
         return
     if data.startswith("atf_ok:") or data.startswith("atf_no:"):
-        confirmed = data.startswith("atf_ok:")
-        alert_id = data.split(":", 1)[1]
-        _save_alert_feedback(alert_id, confirmed)
-        label = "FRAUDE CONFIRMADA" if confirmed else "FALSO POSITIVO"
-        icon  = "✅" if confirmed else "❌"
-        answer_callback(args, callback_id, "{} {}".format(icon, label))
-        edit_message(args, chat_id, message_id,
-                     "{} {} — obrigado! Isso vai melhorar o modelo.".format(icon, label))
+        answer_callback(args, callback_id, "Modulo antifurto removido.")
         return
     answer_callback(args, callback_id)
 
