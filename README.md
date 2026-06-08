@@ -1,168 +1,211 @@
 # PDV Intelbras iMHDX
 
-Pacote de integracao entre WRPDV/Sierra e gravador Intelbras iMHDX.
+Integracao entre WRPDV/Sierra, PDVs Linux e gravador Intelbras iMHDX.
 
-## Conteudo
+O objetivo principal do projeto e fazer as vendas do PDV aparecerem como texto
+sobreposto no video do iMHDX e ficarem pesquisaveis em **Ponto de venda**.
 
-- `docs/MANUAL_PDV_INTELBRAS_IMHDX.md`: manual operacional completo.
-- `scripts/pdv_intelbras_bridge.py`: servico Python instalado nos PDVs Linux.
-- `scripts/pdv_camera_auditor_linux.py`: monitor local de camera e eventos do Espiao, sem regras antifraude.
-- `scripts/pdv_learning_agent.py`: agente passivo para coletar imagens/contexto e preparar dataset do proximo modelo.
-- `scripts/pdv_shadow_antitheft_agent.py`: agente antifurto em modo sombra, sem alertas, para gerar fila de revisao.
-- `scripts/pdv_yolo_world_test.py`: teste offline com YOLO-World nas imagens coletadas.
-- `scripts/pdv_telegram_assistant.py`: assistente Telegram para consultar caixa, dinheiro, cupom e produtos do PDV.
-- `scripts/install_bridge_pdv.sh`: instalador generico da ponte no PDV.
-- `services/*.service`: unidades systemd usadas nos PDVs.
+## Estado Real do Projeto
 
-## Fluxo
+Status em `08/06/2026`:
 
-```text
-PDV Linux -> iMHDX 192.168.24.227:38801
-```
+- Em producao: ponte local `PDV Linux -> iMHDX`, sem servidor intermediario.
+- Em producao: assistente Telegram para consultar caixa, cupom, produto e foto
+  do item pela gravacao do iMHDX.
+- Removido do fluxo ativo: antifurto por movimento/camera, porque gerava falso
+  positivo com mao, braco, cotovelo, maquininha, sacola e movimentos normais.
+- Em estudo: auditoria visual de scanner, baseada em evidencias reais
+  `item do Espiao + horario + imagem do iMHDX`.
 
-Cada PDV usa porta UDP propria:
+Este repositorio ainda contem arquivos antigos/experimentais de camera,
+aprendizado e antifurto. Eles ficam como historico de pesquisa e **nao devem ser
+tratados como producao** sem nova validacao.
 
-```text
-PDV1=52101, PDV2=52102, ..., PDV12=52112
-```
-
-## Status em 2026-05-24
-
-- Acesso SSH confirmado nos PDVs 1 a 12 com usuario administrativo informado pelo operador.
-- `pdv-intelbras-bridge.service` reiniciado nos PDVs 1 a 12 sem reiniciar os computadores.
-- PDV6 estava inativo e voltou para `active`.
-- `pdv_intelbras_bridge.py` atualizado nos 12 PDVs com correcao para trocar automaticamente de arquivo na virada de dia.
-- Backup criado em cada PDV:
-  ` /opt/pdv-intelbras-bridge/pdv_intelbras_bridge.py.bak_20260524_1043`
-
-## Modo de producao
-
-O sistema funciona em envio direto. Cada PDV envia UDP para o iMHDX usando sua
-propria porta de origem (`52100 + numero do PDV`). No iMHDX, cada entrada POS
-deve estar configurada com o IP real do PDV e a porta UDP correspondente.
-
-## Observacao de seguranca
-
-Este pacote nao deve conter senhas, tokens ou dumps completos com credenciais.
-Antes de publicar no GitHub, revise qualquer arquivo novo adicionado fora desta pasta.
-
-## Monitor de camera
-
-O monitor do PDV roda no proprio Linux como servico
-`pdv-camera-auditor.service`. Ele verifica a saude do snapshot da camera e
-registra eventos basicos do arquivo local `EspiaoDDMMAA.001`.
-
-## Agente de aprendizado
-
-O agente `pdv-learning-agent.service` observa a camera e o Espiao sem gerar
-alerta. Ele salva amostras em:
+## Arquitetura de Producao
 
 ```text
-/var/log/pdv-learning-agent/AAAAMMDD/images
-/var/log/pdv-learning-agent/AAAAMMDD/metadata.jsonl
+WRPDV/Sierra
+  -> /home/rpdv/frente/Cm/EspiaoDDMMAA.NNN
+  -> pdv-intelbras-bridge.service
+  -> UDP direto para iMHDX 192.168.24.227:38801
 ```
 
-Cada imagem fica com contexto dos eventos recentes do PDV e status
-`pending_human_review`, para posterior rotulagem e treino do novo modelo. O
-agente tambem mantem:
+Cada PDV envia com porta UDP propria:
 
 ```text
-/var/log/pdv-learning-agent/knowledge/lessons.jsonl
-/var/log/pdv-learning-agent/knowledge/future_antitheft_handoff.json
+PDV1:  52101
+PDV2:  52102
+PDV3:  52103
+...
+PDV12: 52112
 ```
 
-## Agente antifurto sombra
-
-O agente `pdv-shadow-antitheft.service` consome o aprendizado ja coletado e
-cria hipoteses para revisao humana. Ele nao acusa furto, nao envia Telegram e
-nao interfere no PDV.
-
-Saidas:
+No iMHDX, cada entrada POS deve bater com:
 
 ```text
-/var/log/pdv-shadow-antitheft/AAAAMMDD/observations.jsonl
-/var/log/pdv-shadow-antitheft/AAAAMMDD/review_queue.jsonl
-/var/log/pdv-shadow-antitheft/summary.json
+IP real do PDV
+Porta UDP de origem do PDV
+Canal de video correspondente
 ```
 
-## Teste YOLO-World
+Nao ha dependencia do servidor Windows para o envio POS em producao.
 
-Teste offline, sem Telegram e sem servico ativo:
+## Componentes Ativos
+
+### Ponte PDV -> iMHDX
+
+Arquivo:
+
+```text
+scripts/pdv_intelbras_bridge.py
+```
+
+Servico no PDV:
+
+```text
+pdv-intelbras-bridge.service
+```
+
+O que faz:
+
+- le o arquivo `EspiaoDDMMAA.NNN` do frente de caixa;
+- usa fallback no arquivo `CMDDMMAA.NNN` quando necessario;
+- identifica item vendido, abertura/fechamento de cupom, NFC-e e pagamento;
+- converte os dados em texto simples com delimitador `^`;
+- envia UDP para o iMHDX pela porta de origem do PDV.
+
+### Assistente Telegram
+
+Arquivo:
+
+```text
+scripts/pdv_telegram_assistant.py
+```
+
+Servico no PDV:
+
+```text
+pdv-telegram-assistant.service
+```
+
+O que faz:
+
+- mostra status do caixa;
+- consulta resumo do dia;
+- busca cupom;
+- busca produto;
+- lista produto mais vendido;
+- busca foto de item na gravacao do iMHDX;
+- permite escolher data ativa pelo Telegram.
+
+Menu atual:
+
+```text
+Status              Caixa
+Cupom               Ultimo cupom
+Buscar produto      Foto produto
+Produto mais vendido Data
+```
+
+## Componentes Legados ou Experimentais
+
+Os itens abaixo nao representam o fluxo atual de producao:
+
+```text
+scripts/pdv_antitheft_agent.py
+scripts/install_antitheft.sh
+scripts/pdv_learning_agent.py
+scripts/pdv_shadow_antitheft_agent.py
+scripts/pdv_yolo_world_test.py
+services/pdv-antitheft-agent.service
+services/pdv-learning-agent.service
+services/pdv-shadow-antitheft.service
+services/pdv-auto-trainer.service
+```
+
+Eles devem ser considerados material de laboratorio. O caminho novo para IA nao
+e detectar "movimento suspeito"; e responder uma pergunta objetiva:
+
+```text
+O que foi passado pelo scanner corresponde ao que foi registrado no PDV?
+```
+
+## Auditoria Visual: Proximo Caminho Correto
+
+Antes de ligar qualquer IA em producao, o teste correto e montar um conjunto de
+evidencias reais:
+
+```text
+cupom
+horario do item
+produto registrado
+quantidade registrada
+valor
+imagem do iMHDX no momento do item
+recorte da area do scanner
+```
+
+Cada caso deve ser classificado como:
+
+```text
+CONFERE
+NAO_CONFERE
+INCONCLUSIVO
+```
+
+So depois disso faz sentido testar Gemini, OpenAI, Groq ou qualquer outro modelo
+de visao. A IA deve confirmar compatibilidade visual, nao acusar funcionario.
+
+## Configuracao do iMHDX
+
+No gravador:
+
+```text
+Configuracoes > Ponto de venda
+UDPPort: 38801
+```
+
+Para cada PDV:
+
+```text
+Ativo: Sim
+Tipo de conexao: UDP
+Protocolo: General
+Codec/Conversao: UTF-8
+IP origem: IP real do PDV
+Porta origem: 52100 + numero do PDV
+IP destino: 192.168.24.227
+Porta destino: 38801
+Canal vinculado: canal do PDV
+Overlay/Sobreposicao: Ativo
+Delimitador de linha: ^
+```
+
+Exemplo PDV1:
+
+```text
+IP origem: 192.168.24.97
+Porta origem: 52101
+Canal: 1
+```
+
+Exemplo PDV2:
+
+```text
+IP origem: 192.168.24.173
+Porta origem: 52102
+Canal: 2
+```
+
+## Instalacao
+
+Instalacao limpa da ponte em um PDV:
 
 ```sh
-python3 scripts/pdv_yolo_world_test.py \
-  --input-dir /var/log/pdv-learning-agent/AAAAMMDD/images \
-  --outdir /var/log/pdv-yolo-test \
-  --limit 50
+sh /tmp/install_bridge_pdv.sh 1 52101 192.168.24.227 38801
 ```
 
-Saidas:
-
-```text
-/var/log/pdv-yolo-test/AAAAMMDD/results.jsonl
-/var/log/pdv-yolo-test/AAAAMMDD/summary.json
-/var/log/pdv-yolo-test/AAAAMMDD/annotated
-```
-
-Eventos relevantes do Espiao:
-
-```text
-ABRECUPOM  -> cupom aberto
-CSP        -> consulta de produto/preco
-VIT        -> item vendido
-FIN        -> forma de pagamento
-FECHACUPOM -> cupom fechado
-```
-
-## Assistente Telegram
-
-O assistente roda separado do auditor, pelo servico
-`pdv-telegram-assistant.service`. Ele responde comandos no grupo configurado no
-PDV e le o Espiao local do dia.
-
-Quando uma foto de produto ainda nao conhecido e enviada, o bot pergunta o que
-aparece na imagem. A resposta humana alimenta:
-
-```text
-/var/log/pdv-product-learning/products.json
-/var/log/pdv-product-learning/labels.jsonl
-```
-
-O botao `Ensinar produtos` procura automaticamente itens vendidos ainda
-desconhecidos, envia uma foto por vez e espera a resposta humana antes de
-mandar o proximo.
-
-Respostas como `nao tem produto`, `nao aparece` ou `imagem ruim` sao salvas
-como produto nao visivel e nao tornam o codigo conhecido.
-
-O aprendizado usa categorias principais, como `bebida`, `biscoito`, `carne`,
-`hortifruti`, `higiene`, `limpeza` e `mercearia`. Quando um codigo ja e
-conhecido, a foto do produto passa a mostrar a categoria aprendida.
-
-Comandos principais:
-
-```text
-/status
-/data 24/05/2026
-/caixa
-/dinheiro
-/cupom 216530
-/buscar bombom
-/foto 216657 arroz
-arroz 216657
-/ajuda
-```
-
-Pelos botoes do Telegram tambem e possivel escolher a data ativa, informar o
-numero do cupom, pesquisar produto sem digitar o comando completo e pedir uma
-foto do produto no cupom. Para foto, o bot tenta primeiro extrair o quadro da
-gravacao do canal do PDV no iMHDX, exatamente no horario do item; se nao
-conseguir, informa a falha. A imagem enviada vai com a legenda do PDV escrita
-sobre o proprio print.
-
-## Instalador online
-
-No PDV Linux, rode como `root`:
+Tambem existe um instalador online:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/easytecnologias/pdv-intelbras-imhdx/main/install.sh -o install.sh
@@ -170,17 +213,92 @@ chmod +x install.sh
 sudo ./install.sh
 ```
 
-O instalador pergunta os dados do PDV, iMHDX, camera e Telegram.
-Ele cria backup da instalacao anterior, copia os scripts para `/opt`, grava os
-arquivos `.env` em `/etc`, instala os servicos `systemd`, reinicia tudo e mostra
-o status final.
-
-Servicos criados:
+Observacao importante: o `install.sh` ainda contem perguntas e arquivos de
+componentes visuais legados. Para instalacao em serie, o proximo passo do
+projeto e simplificar esse instalador para ativar por padrao apenas:
 
 ```text
 pdv-intelbras-bridge.service
-pdv-camera-auditor.service
-pdv-learning-agent.service
-pdv-shadow-antitheft.service
 pdv-telegram-assistant.service
 ```
+
+## Operacao
+
+Checar ponte:
+
+```sh
+systemctl status pdv-intelbras-bridge.service
+journalctl -u pdv-intelbras-bridge.service -n 80 --no-pager
+```
+
+Reiniciar ponte sem reiniciar o computador:
+
+```sh
+systemctl restart pdv-intelbras-bridge.service
+systemctl is-active pdv-intelbras-bridge.service
+```
+
+Checar Telegram:
+
+```sh
+systemctl status pdv-telegram-assistant.service
+journalctl -u pdv-telegram-assistant.service -n 80 --no-pager
+```
+
+## Comandos Uteis do Telegram
+
+```text
+/status
+/data 24/05/2026
+/caixa
+/cupom 216530
+/buscar bombom
+/foto 216657 arroz
+/ajuda
+```
+
+Tambem e possivel usar os botoes do menu fixo.
+
+## Tabela de PDVs
+
+```text
+PDV   IP              Porta UDP   Canal iMHDX
+001   192.168.24.97   52101       1
+002   192.168.24.173  52102       2
+003   192.168.24.159  52103       3
+004   192.168.24.160  52104       4
+005   192.168.24.35   52105       5
+006   192.168.24.86   52106       6
+007   192.168.24.170  52107       7
+008   192.168.24.186  52108       8
+009   192.168.24.169  52109       9
+010   192.168.24.84   52110       10
+011   192.168.24.172  52111       11
+012   192.168.24.91   52112       12
+```
+
+## Documentacao
+
+Manual operacional principal:
+
+```text
+docs/MANUAL_PDV_INTELBRAS_IMHDX.md
+```
+
+Documentos com `ANTIFURTO`, `GERENTE`, `GROQ`, `GEMINI` ou similares sao
+historico de testes e nao devem ser usados como promessa de producao.
+
+## Seguranca
+
+Nao publicar no GitHub:
+
+```text
+senhas
+tokens Telegram
+chaves Gemini/Groq/OpenAI
+credenciais do iMHDX
+credenciais de camera
+prints contendo dados sensiveis
+```
+
+Arquivos `.env` reais devem ficar apenas no PDV ou no ambiente de producao.
