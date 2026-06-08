@@ -4,10 +4,7 @@ set -eu
 REPO_RAW_BASE="${REPO_RAW_BASE:-https://raw.githubusercontent.com/easytecnologias/pdv-intelbras-imhdx/main}"
 INSTALL_ROOT="/opt"
 BRIDGE_DIR="$INSTALL_ROOT/pdv-intelbras-bridge"
-AUDITOR_DIR="$INSTALL_ROOT/pdv-camera-auditor"
 ASSISTANT_DIR="$INSTALL_ROOT/pdv-telegram-assistant"
-LEARNING_DIR="$INSTALL_ROOT/pdv-learning-agent"
-SHADOW_ANTITHEFT_DIR="$INSTALL_ROOT/pdv-shadow-antitheft"
 BACKUP_ROOT="/var/backups/pdv-intelbras-imhdx"
 TMP_DIR=""
 
@@ -97,9 +94,6 @@ prepare_source() {
     mkdir -p "$TMP_DIR/scripts"
     say "Baixando arquivos do GitHub..."
     download "$REPO_RAW_BASE/scripts/pdv_intelbras_bridge.py" "$TMP_DIR/scripts/pdv_intelbras_bridge.py"
-    download "$REPO_RAW_BASE/scripts/pdv_camera_auditor_linux.py" "$TMP_DIR/scripts/pdv_camera_auditor_linux.py"
-    download "$REPO_RAW_BASE/scripts/pdv_learning_agent.py" "$TMP_DIR/scripts/pdv_learning_agent.py"
-    download "$REPO_RAW_BASE/scripts/pdv_shadow_antitheft_agent.py" "$TMP_DIR/scripts/pdv_shadow_antitheft_agent.py"
     download "$REPO_RAW_BASE/scripts/pdv_telegram_assistant.py" "$TMP_DIR/scripts/pdv_telegram_assistant.py"
     SOURCE_DIR="$TMP_DIR"
 }
@@ -111,20 +105,11 @@ backup_existing() {
 
     for path in \
         "$BRIDGE_DIR" \
-        "$AUDITOR_DIR" \
         "$ASSISTANT_DIR" \
-        "$LEARNING_DIR" \
-        "$SHADOW_ANTITHEFT_DIR" \
         /etc/pdv-intelbras-bridge.env \
-        /etc/pdv-camera-auditor.env \
         /etc/pdv-telegram-assistant.env \
-        /etc/pdv-learning-agent.env \
-        /etc/pdv-shadow-antitheft.env \
         /etc/systemd/system/pdv-intelbras-bridge.service \
-        /etc/systemd/system/pdv-camera-auditor.service \
-        /etc/systemd/system/pdv-telegram-assistant.service \
-        /etc/systemd/system/pdv-learning-agent.service \
-        /etc/systemd/system/pdv-shadow-antitheft.service
+        /etc/systemd/system/pdv-telegram-assistant.service
     do
         if [ -e "$path" ]; then
             cp -a "$path" "$backup_dir/"
@@ -134,7 +119,7 @@ backup_existing() {
 }
 
 install_packages() {
-    if ! yes_no "Instalar/validar dependencias pelo apt? python3-requests python3-pil ffmpegthumbnailer" "s"; then
+    if ! yes_no "Instalar/validar dependencias pelo apt? python3 python3-requests python3-pil ffmpegthumbnailer" "s"; then
         return
     fi
     if command_exists apt-get; then
@@ -146,11 +131,8 @@ install_packages() {
 }
 
 install_files() {
-    mkdir -p "$BRIDGE_DIR" "$AUDITOR_DIR" "$ASSISTANT_DIR" "$LEARNING_DIR" "$SHADOW_ANTITHEFT_DIR"
+    mkdir -p "$BRIDGE_DIR" "$ASSISTANT_DIR"
     install -m 755 "$SOURCE_DIR/scripts/pdv_intelbras_bridge.py" "$BRIDGE_DIR/pdv_intelbras_bridge.py"
-    install -m 755 "$SOURCE_DIR/scripts/pdv_camera_auditor_linux.py" "$AUDITOR_DIR/pdv_camera_auditor_linux.py"
-    install -m 755 "$SOURCE_DIR/scripts/pdv_learning_agent.py" "$LEARNING_DIR/pdv_learning_agent.py"
-    install -m 755 "$SOURCE_DIR/scripts/pdv_shadow_antitheft_agent.py" "$SHADOW_ANTITHEFT_DIR/pdv_shadow_antitheft_agent.py"
     install -m 755 "$SOURCE_DIR/scripts/pdv_telegram_assistant.py" "$ASSISTANT_DIR/pdv_telegram_assistant.py"
 }
 
@@ -163,21 +145,6 @@ IMHDX_IP=$IMHDX_HOST
 IMHDX_PORT=$IMHDX_POS_PORT
 EOF
     chmod 600 /etc/pdv-intelbras-bridge.env
-}
-
-write_auditor_env() {
-    cat >/etc/pdv-camera-auditor.env <<EOF
-CAMERA_HOST=$CAMERA_HOST
-CAMERA_USER=$CAMERA_USER
-CAMERA_PASS=$CAMERA_PASS
-PDV_STATION=$PDV_STATION
-PDV_BASE_DIR=$PDV_BASE_DIR
-AUDITOR_OUTDIR=/var/log/pdv-camera-auditor
-AUDITOR_DURATION=0
-AUDITOR_SPY_TAIL=350
-AUDITOR_SNAPSHOT_INTERVAL=10.0
-EOF
-    chmod 600 /etc/pdv-camera-auditor.env
 }
 
 write_assistant_env() {
@@ -198,39 +165,6 @@ FFMPEGTHUMBNAILER=ffmpegthumbnailer
 PRODUCT_LEARNING_DIR=/var/log/pdv-product-learning
 EOF
     chmod 600 /etc/pdv-telegram-assistant.env
-}
-
-write_learning_env() {
-    cat >/etc/pdv-learning-agent.env <<EOF
-CAMERA_HOST=$CAMERA_HOST
-CAMERA_USER=$CAMERA_USER
-CAMERA_PASS=$CAMERA_PASS
-PDV_STATION=$PDV_STATION
-PDV_BASE_DIR=$PDV_BASE_DIR
-LEARNING_OUTDIR=/var/log/pdv-learning-agent
-LEARNING_DURATION=0
-LEARNING_INTERVAL=3.0
-LEARNING_EVENT_WINDOW=12.0
-LEARNING_CHANGE_THRESHOLD=7.0
-LEARNING_MIN_SAVE_INTERVAL=2.0
-LEARNING_MAX_PER_DAY=3500
-LEARNING_RETENTION_DAYS=10
-LEARNING_SPY_TAIL=350
-EOF
-    chmod 600 /etc/pdv-learning-agent.env
-}
-
-write_shadow_antitheft_env() {
-    cat >/etc/pdv-shadow-antitheft.env <<EOF
-LEARNING_LESSONS_FILE=/var/log/pdv-learning-agent/knowledge/lessons.jsonl
-SHADOW_OUTDIR=/var/log/pdv-shadow-antitheft
-SHADOW_STATE_FILE=/var/lib/pdv-shadow-antitheft/offset.state
-SHADOW_INTERVAL=5.0
-SHADOW_DURATION=0
-SHADOW_MIN_SCORE=50.0
-SHADOW_START_AT_END=1
-EOF
-    chmod 600 /etc/pdv-shadow-antitheft.env
 }
 
 write_services() {
@@ -254,67 +188,10 @@ StandardError=journal
 WantedBy=multi-user.target
 EOF
 
-    cat >/etc/systemd/system/pdv-camera-auditor.service <<'EOF'
-[Unit]
-Description=PDV Camera Auditor
-After=network-online.target pdv-intelbras-bridge.service
-Wants=network-online.target
-
-[Service]
-Type=simple
-EnvironmentFile=/etc/pdv-camera-auditor.env
-ExecStart=/usr/bin/python3 /opt/pdv-camera-auditor/pdv_camera_auditor_linux.py
-Restart=always
-RestartSec=5
-User=root
-WorkingDirectory=/opt/pdv-camera-auditor
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-    cat >/etc/systemd/system/pdv-learning-agent.service <<'EOF'
-[Unit]
-Description=PDV Learning Agent
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-EnvironmentFile=/etc/pdv-learning-agent.env
-ExecStart=/usr/bin/python3 /opt/pdv-learning-agent/pdv_learning_agent.py
-Restart=always
-RestartSec=5
-User=root
-WorkingDirectory=/opt/pdv-learning-agent
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-    cat >/etc/systemd/system/pdv-shadow-antitheft.service <<'EOF'
-[Unit]
-Description=PDV Shadow Antitheft Agent
-After=network-online.target pdv-learning-agent.service
-Wants=network-online.target
-
-[Service]
-Type=simple
-EnvironmentFile=/etc/pdv-shadow-antitheft.env
-ExecStart=/usr/bin/python3 /opt/pdv-shadow-antitheft/pdv_shadow_antitheft_agent.py
-Restart=always
-RestartSec=5
-User=root
-WorkingDirectory=/opt/pdv-shadow-antitheft
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
     cat >/etc/systemd/system/pdv-telegram-assistant.service <<'EOF'
 [Unit]
 Description=PDV Telegram Assistant
-After=network-online.target pdv-camera-auditor.service
+After=network-online.target pdv-intelbras-bridge.service
 Wants=network-online.target
 
 [Service]
@@ -331,60 +208,47 @@ WantedBy=multi-user.target
 EOF
 }
 
+disable_legacy_services() {
+    for svc in \
+        pdv-camera-auditor.service \
+        pdv-learning-agent.service \
+        pdv-shadow-antitheft.service \
+        pdv-antitheft-agent.service \
+        pdv-auto-trainer.timer \
+        pdv-auto-trainer.service
+    do
+        systemctl disable --now "$svc" 2>/dev/null || true
+    done
+}
+
 validate_python() {
     python3 -m py_compile \
         "$BRIDGE_DIR/pdv_intelbras_bridge.py" \
-        "$AUDITOR_DIR/pdv_camera_auditor_linux.py" \
-        "$LEARNING_DIR/pdv_learning_agent.py" \
-        "$SHADOW_ANTITHEFT_DIR/pdv_shadow_antitheft_agent.py" \
         "$ASSISTANT_DIR/pdv_telegram_assistant.py"
 }
 
 enable_services() {
     systemctl daemon-reload
     systemctl enable pdv-intelbras-bridge.service
-    systemctl enable pdv-camera-auditor.service
     systemctl enable pdv-telegram-assistant.service
-    if [ "$ENABLE_LEARNING_AGENT" = "1" ]; then
-        systemctl enable pdv-learning-agent.service
-    fi
-    if [ "$ENABLE_SHADOW_ANTITHEFT" = "1" ]; then
-        systemctl enable pdv-shadow-antitheft.service
-    fi
     systemctl restart pdv-intelbras-bridge.service
-    systemctl restart pdv-camera-auditor.service
     systemctl restart pdv-telegram-assistant.service
-    if [ "$ENABLE_LEARNING_AGENT" = "1" ]; then
-        systemctl restart pdv-learning-agent.service
-    else
-        systemctl disable --now pdv-learning-agent.service 2>/dev/null || true
-    fi
-    if [ "$ENABLE_SHADOW_ANTITHEFT" = "1" ]; then
-        systemctl restart pdv-shadow-antitheft.service
-    else
-        systemctl disable --now pdv-shadow-antitheft.service 2>/dev/null || true
-    fi
 }
 
 show_status() {
     say ""
     say "Status final:"
     systemctl --no-pager --full status pdv-intelbras-bridge.service || true
-    systemctl --no-pager --full status pdv-camera-auditor.service || true
-    systemctl --no-pager --full status pdv-learning-agent.service || true
-    systemctl --no-pager --full status pdv-shadow-antitheft.service || true
     systemctl --no-pager --full status pdv-telegram-assistant.service || true
     say ""
     say "Comandos uteis:"
     say "  journalctl -u pdv-intelbras-bridge.service -n 80 --no-pager"
-    say "  journalctl -u pdv-camera-auditor.service -n 80 --no-pager"
-    say "  journalctl -u pdv-learning-agent.service -n 80 --no-pager"
-    say "  journalctl -u pdv-shadow-antitheft.service -n 80 --no-pager"
     say "  journalctl -u pdv-telegram-assistant.service -n 80 --no-pager"
 }
 
 collect_config() {
     say "Instalador PDV Intelbras iMHDX"
+    say "Instala somente a ponte POS e o assistente Telegram."
     say ""
     ask "Numero do PDV" "1" PDV_NUMBER
     PDV_STATION="$(station3 "$PDV_NUMBER")"
@@ -398,21 +262,6 @@ collect_config() {
     ask "Usuario do iMHDX" "admin" IMHDX_USER
     ask_secret "Senha do iMHDX" IMHDX_PASS
 
-    ask "IP da camera do PDV" "10.10.10.20" CAMERA_HOST
-    ask "Usuario da camera/ONVIF" "" CAMERA_USER
-    ask_secret "Senha da camera/ONVIF" CAMERA_PASS
-    if yes_no "Ativar agente de aprendizado visual?" "n"; then
-        ENABLE_LEARNING_AGENT=1
-    else
-        ENABLE_LEARNING_AGENT=0
-    fi
-    if yes_no "Ativar agente antifurto sombra?" "n"; then
-        ENABLE_SHADOW_ANTITHEFT=1
-        ENABLE_LEARNING_AGENT=1
-    else
-        ENABLE_SHADOW_ANTITHEFT=0
-    fi
-
     ask "Token do bot Telegram" "" TELEGRAM_BOT_TOKEN
     ask "ID do grupo Telegram" "" TELEGRAM_CHAT_ID
 
@@ -421,10 +270,8 @@ collect_config() {
     say "  PDV: $PDV_STATION"
     say "  Porta origem UDP: $PDV_SRC_PORT"
     say "  iMHDX: $IMHDX_HOST:$IMHDX_POS_PORT canal $IMHDX_CHANNEL"
-    say "  Camera: $CAMERA_HOST"
-    say "  Agente aprendizado: $ENABLE_LEARNING_AGENT"
-    say "  Agente antifurto sombra: $ENABLE_SHADOW_ANTITHEFT"
     say "  Frente: $PDV_BASE_DIR"
+    say "  Servicos: pdv-intelbras-bridge + pdv-telegram-assistant"
     say ""
     yes_no "Confirmar instalacao?" "s" || die "instalacao cancelada"
 }
@@ -444,11 +291,9 @@ backup_existing
 install_packages
 install_files
 write_bridge_env
-write_auditor_env
 write_assistant_env
-write_learning_env
-write_shadow_antitheft_env
 write_services
+disable_legacy_services
 validate_python
 enable_services
 show_status

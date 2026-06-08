@@ -213,14 +213,15 @@ chmod +x install.sh
 sudo ./install.sh
 ```
 
-Observacao importante: o `install.sh` ainda contem perguntas e arquivos de
-componentes visuais legados. Para instalacao em serie, o proximo passo do
-projeto e simplificar esse instalador para ativar por padrao apenas:
+O `install.sh` instala apenas os componentes de producao:
 
 ```text
 pdv-intelbras-bridge.service
 pdv-telegram-assistant.service
 ```
+
+Durante a instalacao ele tambem desativa servicos legados de camera,
+aprendizado e antifurto, se existirem no PDV.
 
 ## Operacao
 
