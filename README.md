@@ -16,6 +16,8 @@ Status em `08/06/2026`:
   positivo com mao, braco, cotovelo, maquininha, sacola e movimentos normais.
 - Em estudo: auditoria visual de scanner, baseada em evidencias reais
   `item do Espiao + horario + imagem do iMHDX`.
+- Em teste no PDV1: auditoria visual pela Groq com o modelo Llama 4 Scout,
+  usando exclusivamente imagens extraidas da gravacao do iMHDX.
 
 Este repositorio ainda contem arquivos antigos/experimentais de camera,
 aprendizado e antifurto. Eles ficam como historico de pesquisa e **nao devem ser
@@ -153,8 +155,9 @@ NAO_CONFERE
 INCONCLUSIVO
 ```
 
-So depois disso faz sentido testar Gemini, OpenAI, Groq ou qualquer outro modelo
-de visao. A IA deve confirmar compatibilidade visual, nao acusar funcionario.
+O teste atual usa Groq/Llama 4 Scout. A IA confirma compatibilidade visual e
+nao acusa funcionario. Casos sem evidencia suficiente ficam como
+`INCONCLUSIVO`.
 
 ## Configuracao do iMHDX
 

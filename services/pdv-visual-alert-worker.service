@@ -1,0 +1,21 @@
+[Unit]
+Description=PDV1 Visual Alert Worker via iMHDX
+After=network-online.target pdv-telegram-assistant.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/pdv-telegram-assistant.env
+Environment=VISUAL_ALERT_POLL_SECONDS=1
+Environment=VISUAL_ALERT_MIN_VALUE=20
+Environment=VISUAL_ALERT_SEND_CONFERE=0
+Environment=VISUAL_ALERT_START_FRESH=1
+Environment=VISUAL_ALERT_DELAY_SECONDS=25
+ExecStart=/usr/bin/python3.8 /opt/pdv-visual-auditor/pdv_visual_alert_worker.py
+Restart=always
+RestartSec=5
+User=root
+WorkingDirectory=/opt/pdv-visual-auditor
+
+[Install]
+WantedBy=multi-user.target
