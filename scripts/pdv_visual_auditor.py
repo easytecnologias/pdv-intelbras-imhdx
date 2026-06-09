@@ -6,6 +6,7 @@ import os
 import re
 import sys
 import time
+import unicodedata
 from pathlib import Path
 
 import requests
@@ -191,6 +192,12 @@ def montar_prompt(produto, valor, quantidade):
     )
 
 
+def normalizar_texto(texto):
+    texto = unicodedata.normalize("NFKD", str(texto or ""))
+    texto = texto.encode("ascii", "ignore").decode("ascii")
+    return texto.lower()
+
+
 def tokens_relevantes(produto):
     ignorar = {
         "trad",
@@ -206,7 +213,7 @@ def tokens_relevantes(produto):
         "cx",
     }
     tokens = []
-    for token in re.findall(r"[A-Za-z0-9]+", produto.lower()):
+    for token in re.findall(r"[a-z0-9]+", normalizar_texto(produto)):
         if len(token) < 4 or token in ignorar or token.isdigit():
             continue
         tokens.append(token)
@@ -223,9 +230,11 @@ def aplicar_trava_conservadora(resultado, produto, quantidade):
         )
     ).lower()
 
-    texto_imagem = str(resultado.get("o_que_aparece_na_imagem", "")).lower()
-    produto_norm = produto.lower()
-    comparacao_norm = str(resultado.get("comparacao_pdv", "")).lower()
+    texto_imagem = normalizar_texto(
+        resultado.get("o_que_aparece_na_imagem", "")
+    )
+    produto_norm = normalizar_texto(produto)
+    comparacao_norm = normalizar_texto(resultado.get("comparacao_pdv", ""))
     item_pesavel = " kg" in (" " + produto_norm) or " kg" in comparacao_norm
     produto_carne = any(
         termo in produto_norm
@@ -242,6 +251,25 @@ def aplicar_trava_conservadora(resultado, produto, quantidade):
     )
 
     if resultado.get("resultado") == "INCONCLUSIVO":
+        tokens_produto = tokens_relevantes(produto)
+        tokens_identificados = [
+            token for token in tokens_produto if token in texto_imagem
+        ]
+        if float(quantidade or 0) > 1 and tokens_identificados:
+            resultado["resultado"] = "CONFERE"
+            resultado["confianca"] = max(int(resultado.get("confianca") or 0), 85)
+            resultado["comparacao_pdv"] = (
+                "Produto visualmente compativel com o registro do PDV: a "
+                "imagem identificou %s. A quantidade %s foi tratada como "
+                "multiplicacao informada no caixa; a imagem do momento do "
+                "scanner precisa mostrar a unidade escaneada, nao todas as "
+                "unidades da linha."
+                % (", ".join(tokens_identificados), quantidade)
+            )
+            resultado["possivel_divergencia"] = ""
+            resultado["acao_recomendada"] = "liberar"
+            return resultado
+
         if produto_cerveja and imagem_cerveja:
             resultado["resultado"] = "CONFERE"
             resultado["confianca"] = max(int(resultado.get("confianca") or 0), 85)
