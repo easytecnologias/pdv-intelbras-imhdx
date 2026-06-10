@@ -29,8 +29,8 @@ MODEL_NAME = "meta-llama/llama-4-scout-17b-16e-instruct"
 COOLDOWN_PATH = Path("/var/lib/pdv-visual-auditor/groq_cooldown.json")
 RESULTS_PATH = Path("/var/lib/pdv-visual-auditor/results.jsonl")
 REQUESTS_PATH = Path("/var/lib/pdv-visual-auditor/request_times.json")
-MAX_CALLS_PER_MINUTE = int(os.environ.get("GROQ_MAX_CALLS_PER_MINUTE", "3"))
-MAX_CALLS_PER_HOUR = int(os.environ.get("GROQ_MAX_CALLS_PER_HOUR", "30"))
+MAX_CALLS_PER_MINUTE = int(os.environ.get("GROQ_MAX_CALLS_PER_MINUTE", "5"))
+MAX_CALLS_PER_HOUR = int(os.environ.get("GROQ_MAX_CALLS_PER_HOUR", "150"))
 
 SYSTEM_PROMPT = (
     "Voce e um observador visual de caixas de supermercado. Identifique apenas "
