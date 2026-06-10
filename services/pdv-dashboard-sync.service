@@ -1,0 +1,18 @@
+[Unit]
+Description=PDV1 Dashboard Sync — envia eventos e saude para o Easy Auditoria
+After=network-online.target pdv-visual-alert-worker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/pdv-telegram-assistant.env
+EnvironmentFile=-/etc/pdv-dashboard-sync.env
+ExecStart=/usr/bin/python3.8 /opt/pdv-visual-auditor/pdv_dashboard_sync.py
+User=root
+WorkingDirectory=/opt/pdv-visual-auditor
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target

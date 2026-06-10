@@ -1,0 +1,11 @@
+[Unit]
+Description=PDV1 Dashboard Sync — executa a cada 2 minutos
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=2min
+Persistent=true
+Unit=pdv-dashboard-sync.service
+
+[Install]
+WantedBy=timers.target
