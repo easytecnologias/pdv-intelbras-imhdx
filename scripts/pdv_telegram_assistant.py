@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 import argparse
 import calendar
+import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
+import tempfile
 import time
 import unicodedata
 from collections import defaultdict
@@ -14,7 +17,7 @@ from urllib.parse import quote
 
 import requests
 from requests.auth import HTTPDigestAuth
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFont, ImageStat
 
 
 LINE_RE = re.compile(r"^(?P<time>\d{2}:\d{2}:\d{2}):(?P<event>[A-Z]+)\s*\|\s*(?P<body>.*)$")
@@ -61,6 +64,18 @@ def parse_args():
 def api(args, method, **kwargs):
     url = "https://api.telegram.org/bot%s/%s" % (args.token, method)
     response = requests.post(url, timeout=35, **kwargs)
+    if response.status_code == 429:
+        try:
+            retry_after = int(response.json().get("parameters", {}).get("retry_after", 3))
+        except Exception:
+            retry_after = 3
+        time.sleep(max(1, min(retry_after, 15)))
+        for file_value in (kwargs.get("files") or {}).values():
+            try:
+                file_value.seek(0)
+            except Exception:
+                pass
+        response = requests.post(url, timeout=35, **kwargs)
     if response.status_code != 200:
         raise RuntimeError("telegram %s HTTP %s: %s" % (method, response.status_code, response.text[:200]))
     payload = response.json()
@@ -181,7 +196,8 @@ def main_keyboard():
             [{"text": "Status"}, {"text": "Caixa"}],
             [{"text": "Cupom"}, {"text": "Ultimo cupom"}],
             [{"text": "Buscar produto"}, {"text": "Foto produto"}],
-            [{"text": "Produto mais vendido"}, {"text": "Data"}],
+            [{"text": "Auditar produto"}, {"text": "Produto mais vendido"}],
+            [{"text": "Data"}],
         ],
         "resize_keyboard": True,
         "one_time_keyboard": False,
@@ -308,6 +324,14 @@ def money(value):
 def money_br(value):
     text = "{:,.2f}".format(value)
     return "R$ " + text.replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def item_unit_value(item):
+    qty = qty_number(item.get("qty"))
+    total = money(item.get("value"))
+    if qty > 0:
+        return total / qty
+    return total
 
 
 def qty_number(value):
@@ -686,11 +710,20 @@ def parse_fields(body):
     return {name: value.strip() for name, value in FIELD_RE.findall(body)}
 
 
+def clock_seconds(value):
+    try:
+        hour, minute, second = [int(part) for part in value.split(":")]
+        return (hour * 3600) + (minute * 60) + second
+    except Exception:
+        return -1
+
+
 def read_sales(args):
     path = spy_path(args)
     cups = []
     by_number = {}
     current = None
+    pending_consultations = []
     if not path.exists():
         return cups, by_number, path
 
@@ -716,6 +749,17 @@ def read_sales(args):
             }
             cups.append(current)
             by_number[number] = current
+        elif event == "CSP":
+            consultation = {
+                "time": ts,
+                "code": fields.get("Cod", ""),
+                "desc": fields.get("Descricao", ""),
+                "qty": fields.get("Quant", "1"),
+                "unit": fields.get("Und", ""),
+                "unit_value": money(fields.get("VlUnit", "0")),
+            }
+            pending_consultations.append(consultation)
+            pending_consultations = pending_consultations[-10:]
         elif event == "VIT":
             if current is None:
                 current = {
@@ -729,6 +773,18 @@ def read_sales(args):
                     "closed": "",
                 }
                 cups.append(current)
+            item_time = clock_seconds(ts)
+            related_consultations = [
+                consultation
+                for consultation in pending_consultations
+                if (
+                    item_time >= 0
+                    and clock_seconds(consultation["time"]) >= 0
+                    and 0
+                    <= item_time - clock_seconds(consultation["time"])
+                    <= 90
+                )
+            ]
             item = {
                 "time": ts,
                 "code": fields.get("Cod", ""),
@@ -736,8 +792,10 @@ def read_sales(args):
                 "qty": fields.get("Quant", "1"),
                 "unit": fields.get("Und", ""),
                 "value": money(fields.get("VlTotal", "0")),
+                "consultations": related_consultations,
             }
             current["items"].append(item)
+            pending_consultations = []
         elif event == "SBT" and current is not None:
             current["subtotal"] = money(fields.get("VlTotal", "0"))
         elif event == "FIN" and current is not None:
@@ -865,12 +923,12 @@ def product_search_keyboard(page, pages):
 
 
 def search_items(args, term, page=0):
-    term_low = term.lower()
+    term_low = normalize_text(term)
     cups, _, _ = read_sales(args)
     hits = []
     for cup in cups:
         for item in cup["items"]:
-            if term_low in item["desc"].lower() or term_low in item["code"]:
+            if term_low in normalize_text(item["desc"]) or term_low in normalize_text(item["code"]):
                 hits.append((cup, item))
     if not hits:
         return "🔎 Produto nao encontrado\n\n📅 %s\n📝 Busca: %s" % (
@@ -1140,6 +1198,9 @@ def imhdx_photo_for_item(args, cupom, item):
             stamped_path = overlay_pdv_caption(args, jpg_path, cupom, item, source)
             return {
                 "imagem": stamped_path,
+                "imagem_original": str(jpg_path),
+                "dav": str(dav_path),
+                "frame_offset": max(1, args.imhdx_window_before),
                 "hora": target_dt.strftime("%Y-%m-%d %H:%M:%S"),
                 "fonte": source,
             }
@@ -1148,15 +1209,427 @@ def imhdx_photo_for_item(args, cupom, item):
     return None
 
 
+def imhdx_sequence_for_item(args, cupom, item):
+    event = imhdx_photo_for_item(args, cupom, item)
+    if not event:
+        return None
+
+    dav_path = Path(event.get("dav", ""))
+    if not dav_path.is_file():
+        return event
+
+    frame_paths = []
+    center = max(float(event.get("frame_offset", 2)), 1.0)
+    offsets = (max(center - 1.0, 0.2), center, center + 1.0)
+    sequence_path = dav_path.with_name(dav_path.stem + "_sequence.jpg")
+    try:
+        for index, offset in enumerate(offsets):
+            frame_path = dav_path.with_name(
+                "%s_seq_%s.jpg" % (dav_path.stem, index)
+            )
+            result = subprocess.run(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-loglevel",
+                    "error",
+                    "-i",
+                    str(dav_path),
+                    "-ss",
+                    "%.2f" % offset,
+                    "-frames:v",
+                    "1",
+                    "-q:v",
+                    "3",
+                    str(frame_path),
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=20,
+                check=False,
+            )
+            if (
+                result.returncode != 0
+                or not frame_path.exists()
+                or frame_path.stat().st_size < 1024
+            ):
+                continue
+            frame_paths.append(frame_path)
+
+        if len(frame_paths) < 2:
+            return event
+
+        panels = []
+        labels = ("ANTES", "BIP", "DEPOIS")
+        for index, frame_path in enumerate(frame_paths):
+            image = Image.open(str(frame_path)).convert("RGB")
+            width, height = image.size
+            left = int(width * 0.35)
+            top = int(height * 0.22)
+            right = min(width, int(width * 0.97))
+            bottom = min(height, int(height * 0.97))
+            panel = image.crop((left, top, right, bottom))
+            resampling = getattr(Image, "Resampling", Image)
+            panel.thumbnail((640, 500), resampling.LANCZOS)
+            canvas = Image.new("RGB", (640, 520), "black")
+            x = (640 - panel.width) // 2
+            y = 20 + (500 - panel.height) // 2
+            canvas.paste(panel, (x, y))
+            draw = ImageDraw.Draw(canvas)
+            draw.rectangle((0, 0, 640, 28), fill=(0, 0, 0))
+            draw.text(
+                (12, 5),
+                labels[min(index, len(labels) - 1)],
+                fill=(255, 220, 0),
+            )
+            panels.append(canvas)
+
+        sequence = Image.new("RGB", (640 * len(panels), 520), "black")
+        for index, panel in enumerate(panels):
+            sequence.paste(panel, (640 * index, 0))
+        sequence.save(str(sequence_path), quality=88)
+        event["auditoria_imagem"] = str(sequence_path)
+        event["frames_analisados"] = len(panels)
+        event["movimento_scanner"] = sequence_motion_score(
+            sequence_path,
+            panel_count=len(panels),
+        )
+        return event
+    except Exception:
+        return event
+    finally:
+        for frame_path in frame_paths:
+            frame_path.unlink(missing_ok=True)
+
+
+def sequence_motion_score(sequence_path, panel_count=3):
+    image = Image.open(str(sequence_path)).convert("L")
+    panel_count = max(int(panel_count), 2)
+    panel_width = image.width // panel_count
+    if panel_width <= 0:
+        return {"media": 0.0, "pixels_alterados": 0.0, "pares": 0}
+
+    panels = []
+    for index in range(panel_count):
+        panel = image.crop(
+            (
+                index * panel_width,
+                min(30, image.height),
+                min((index + 1) * panel_width, image.width),
+                image.height,
+            )
+        )
+        panels.append(panel.resize((160, 120)).convert("L"))
+
+    means = []
+    changed_ratios = []
+    for previous, current in zip(panels, panels[1:]):
+        difference = ImageChops.difference(previous, current)
+        means.append(ImageStat.Stat(difference).mean[0])
+        changed = sum(1 for value in difference.getdata() if value >= 18)
+        changed_ratios.append((changed / float(160 * 120)) * 100.0)
+
+    return {
+        "media": round(max(means or [0.0]), 2),
+        "pixels_alterados": round(max(changed_ratios or [0.0]), 2),
+        "pares": len(means),
+    }
+
+
+def visual_video_request_dir(args):
+    path = Path(args.state_dir) / "visual_video_requests"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def occurrence_dir(args, status):
+    path = Path(args.state_dir) / "visual_occurrences" / status
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def occurrence_paths(args, request_id, status):
+    base = occurrence_dir(args, status) / request_id
+    return base.with_suffix(".mp4"), base.with_suffix(".json")
+
+
+def save_visual_video_request(args, cupom, item):
+    event_date = query_date(args).strftime("%Y-%m-%d")
+    identity = "|".join(
+        [
+            str(args.pdv_station),
+            event_date,
+            str(cupom),
+            str(item.get("time", "")),
+            str(item.get("code", "")),
+            str(item.get("qty", "")),
+        ]
+    )
+    request_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
+    payload = {
+        "created_at": int(time.time()),
+        "pdv": str(args.pdv_station),
+        "date": event_date,
+        "cupom": str(cupom),
+        "item_time": str(item.get("time", "")),
+        "code": str(item.get("code", "")),
+        "desc": str(item.get("desc", "")),
+        "qty": item.get("qty", 0),
+        "value": money(item.get("value", 0)),
+        "unit_value": item_unit_value(item),
+        "channel": int(args.imhdx_channel),
+    }
+    target = visual_video_request_dir(args) / ("%s.json" % request_id)
+    temporary = target.with_suffix(".tmp")
+    temporary.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    temporary.replace(target)
+    return request_id
+
+
+def visual_video_keyboard(request_id):
+    return {
+        "inline_keyboard": [
+            [
+                {
+                    "text": "▶ Ver video do evento (20s)",
+                    "callback_data": "visual_video:%s" % request_id,
+                }
+            ]
+        ]
+    }
+
+
+def occurrence_keyboard(request_id):
+    return {
+        "inline_keyboard": [
+            [
+                {
+                    "text": "💾 Salvar ocorrencia",
+                    "callback_data": "occ_save:%s" % request_id,
+                },
+                {
+                    "text": "🗑 Ignorar video",
+                    "callback_data": "occ_ignore:%s" % request_id,
+                },
+            ]
+        ]
+    }
+
+
+def edit_message_keyboard(args, chat_id, message_id, reply_markup):
+    api(
+        args,
+        "editMessageReplyMarkup",
+        data={
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "reply_markup": json.dumps(reply_markup),
+        },
+    )
+
+
+def save_occurrence(args, request_id):
+    pending_video, pending_metadata = occurrence_paths(args, request_id, "pending")
+    saved_video, saved_metadata = occurrence_paths(args, request_id, "saved")
+    if saved_video.exists() and saved_metadata.exists():
+        return saved_video
+    if not pending_video.exists() or not pending_metadata.exists():
+        return None
+
+    metadata = json.loads(pending_metadata.read_text(encoding="utf-8"))
+    metadata["status"] = "saved"
+    metadata["saved_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    temporary = saved_metadata.with_suffix(".tmp")
+    temporary.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+    pending_video.replace(saved_video)
+    temporary.replace(saved_metadata)
+    pending_metadata.unlink(missing_ok=True)
+    return saved_video
+
+
+def ignore_occurrence(args, request_id):
+    pending_video, pending_metadata = occurrence_paths(args, request_id, "pending")
+    pending_video.unlink(missing_ok=True)
+    pending_metadata.unlink(missing_ok=True)
+
+
+def load_visual_video_request(args, request_id):
+    if not re.fullmatch(r"[0-9a-f]{16}", request_id or ""):
+        return None
+    path = visual_video_request_dir(args) / ("%s.json" % request_id)
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if time.time() - int(payload.get("created_at", 0)) > (7 * 24 * 60 * 60):
+        return None
+    return payload
+
+
+def baixar_clipe_imhdx(args, event_dt, channel, output_path, before=10, after=10, duration=20):
+    """Baixa um trecho de gravacao do iMHDX (loadfile.cgi) e converte para mp4."""
+    if not args.imhdx_host or not args.imhdx_user or not args.imhdx_pass:
+        raise RuntimeError("credenciais do iMHDX nao configuradas")
+
+    start = event_dt - timedelta(seconds=before)
+    end = event_dt + timedelta(seconds=after)
+    url = (
+        "http://%s/cgi-bin/loadfile.cgi?action=startLoad&channel=%s&startTime=%s&endTime=%s"
+        % (
+            args.imhdx_host,
+            channel or args.imhdx_channel,
+            quote(start.strftime("%Y-%m-%d %H:%M:%S")),
+            quote(end.strftime("%Y-%m-%d %H:%M:%S")),
+        )
+    )
+
+    response = requests.get(
+        url,
+        auth=HTTPDigestAuth(args.imhdx_user, args.imhdx_pass),
+        timeout=45,
+    )
+    if (
+        response.status_code != 200
+        or len(response.content) < 2048
+        or not response.content.startswith(b"DHAV")
+    ):
+        raise RuntimeError("gravacao indisponivel no intervalo solicitado")
+
+    with tempfile.TemporaryDirectory(prefix="pdv_visual_video_") as temp_dir:
+        dav_path = Path(temp_dir) / "evento.dav"
+        dav_path.write_bytes(response.content)
+        conversion = subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(dav_path),
+                "-t",
+                str(duration),
+                "-vf",
+                "scale=640:-2",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "fast",
+                "-crf",
+                "28",
+                "-an",
+                "-movflags",
+                "+faststart",
+                str(output_path),
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=90,
+            check=False,
+        )
+        if (
+            conversion.returncode != 0
+            or not Path(output_path).exists()
+            or Path(output_path).stat().st_size < 2048
+        ):
+            raise RuntimeError("nao foi possivel converter a gravacao")
+
+    return start, end
+
+
+def send_visual_video(args, chat_id, request_id):
+    event = load_visual_video_request(args, request_id)
+    if not event:
+        send_message(args, "Este video expirou ou o evento nao foi encontrado.")
+        return
+    if not args.imhdx_host or not args.imhdx_user or not args.imhdx_pass:
+        send_message(args, "As credenciais do iMHDX nao estao configuradas neste PDV.")
+        return
+
+    try:
+        event_dt = datetime.strptime(
+            "%s %s" % (event["date"], event["item_time"]),
+            "%Y-%m-%d %H:%M:%S",
+        )
+    except Exception:
+        send_message(args, "O horario deste evento e invalido.")
+        return
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="pdv_visual_video_") as temp_dir:
+            mp4_path = Path(temp_dir) / "evento.mp4"
+            start, end = baixar_clipe_imhdx(
+                args,
+                event_dt,
+                event.get("channel", args.imhdx_channel),
+                mp4_path,
+            )
+            if mp4_path.stat().st_size > 49 * 1024 * 1024:
+                raise RuntimeError("video maior que o limite do Telegram")
+
+            pending_video, pending_metadata = occurrence_paths(
+                args, request_id, "pending"
+            )
+            shutil.copy2(str(mp4_path), str(pending_video))
+            occurrence_data = dict(event)
+            occurrence_data.update(
+                {
+                    "request_id": request_id,
+                    "status": "pending",
+                    "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "video_start": start.strftime("%Y-%m-%d %H:%M:%S"),
+                    "video_end": end.strftime("%Y-%m-%d %H:%M:%S"),
+                }
+            )
+            pending_metadata.write_text(
+                json.dumps(occurrence_data, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+
+            caption = (
+                "🎞 Video vinculado ao evento POS\n\n"
+                "🧾 Cupom: %s\n"
+                "🕒 Evento: %s\n"
+                "📦 Produto: %s\n"
+                "🎥 Janela: %s ate %s\n"
+                "📹 Fonte: Gravacao PDV %s / iMHDX"
+            ) % (
+                event.get("cupom", ""),
+                event.get("item_time", ""),
+                str(event.get("desc", "")).title(),
+                start.strftime("%H:%M:%S"),
+                end.strftime("%H:%M:%S"),
+                str(event.get("pdv", "")).zfill(3),
+            )
+            with mp4_path.open("rb") as video:
+                api(
+                    args,
+                    "sendVideo",
+                    data={
+                        "chat_id": chat_id,
+                        "caption": caption[:1024],
+                        "supports_streaming": "true",
+                        "reply_markup": json.dumps(
+                            occurrence_keyboard(request_id)
+                        ),
+                    },
+                    files={"video": video},
+                )
+    except Exception as exc:
+        send_message(
+            args,
+            "Nao consegui gerar o video deste evento no iMHDX: %s" % exc,
+        )
+
+
 def product_photo(args, cupom, term):
     _, by_number, _ = read_sales(args)
     cup = by_number.get(str(cupom).strip())
     if not cup:
         return {"text": "Nao achei o cupom %s em %s." % (cupom, date_label(query_date(args)))}
-    term_low = term.lower().strip()
+    term_low = normalize_text(term)
     matches = [
         item for item in cup["items"]
-        if term_low in item["desc"].lower() or term_low in item["code"]
+        if term_low in normalize_text(item["desc"]) or term_low in normalize_text(item["code"])
     ]
     if not matches:
         return {"text": "Nao achei '%s' no cupom %s." % (term, cupom)}
@@ -1224,6 +1697,223 @@ def product_photo(args, cupom, term):
         "tem coca cola, macarrao e laranja"
     )
     return {"photo": event["imagem"], "caption": caption, "question": question, "reply_markup": category_keyboard()}
+
+
+def visual_audit_status_icon(resultado):
+    if resultado == "CONFERE" or resultado == "CONFERE_POR_REGRA_DE_VALOR":
+        return "✅"
+    if resultado == "NAO_CONFERE":
+        return "⚠️"
+    if resultado == "NAO_ANALISADO":
+        return "🛠"
+    return "❔"
+
+
+def format_visual_audit_caption(args, cupom, item, audit, source):
+    resultado = audit.get("resultado", "INCONCLUSIVO")
+    confianca = audit.get("confianca")
+    unit_value = item_unit_value(item)
+    lines = [
+        "🔎 Auditoria visual PDV %s" % args.pdv_station,
+        "📅 %s" % date_label(query_date(args)),
+        "",
+        "🧾 Cupom: %s" % cupom,
+        "🕒 Hora do item: %s" % item.get("time", "-"),
+        "📦 Produto PDV: %s" % item.get("desc", "").title(),
+        "🔢 Codigo: %s" % (item.get("code") or "sem codigo"),
+        "⚖️ Quantidade: %s" % item.get("qty", "1"),
+        "💰 Valor unitario: %s" % money_br(unit_value),
+        "",
+        "%s Resultado: %s" % (visual_audit_status_icon(resultado), resultado),
+    ]
+    consultations = item.get("consultations") or []
+    if consultations:
+        lines.extend(["", "🔍 Consulta antes do registro"])
+        for consultation in consultations[-4:]:
+            lines.append(
+                "• %s - %s (%s)"
+                % (
+                    consultation.get("time", "-"),
+                    str(consultation.get("desc", "")).title(),
+                    money_br(consultation.get("unit_value", 0)),
+                )
+            )
+        lines.append(
+            "✅ Item registrado: %s" % str(item.get("desc", "")).title()
+        )
+    if confianca is not None:
+        lines.append("🎯 Confianca: %s%%" % confianca)
+    else:
+        lines.append("🎯 Confianca: nao se aplica")
+    seen = audit.get("o_que_aparece_na_imagem") or ""
+    comparison = audit.get("comparacao_pdv") or ""
+    divergence = audit.get("possivel_divergencia") or ""
+    technical_error = audit.get("erro_tecnico") or ""
+    action = audit.get("acao_recomendada") or "revisar gravacao"
+    if seen:
+        lines.extend(["", "👁 Imagem: %s" % seen])
+    if comparison:
+        lines.extend(["", "📌 Comparacao: %s" % comparison])
+    if divergence:
+        lines.extend(["", "⚠️ Divergencia: %s" % divergence])
+    if technical_error:
+        lines.extend(["", "🛠 Falha tecnica: %s" % technical_error])
+    if audit.get("frames_analisados"):
+        lines.extend(
+            [
+                "",
+                "🎞 Frames analisados: %s (antes, bip e depois)"
+                % audit["frames_analisados"],
+            ]
+        )
+    motion = audit.get("movimento_scanner") or {}
+    if motion:
+        lines.append(
+            "📊 Movimento local: media %.2f; pixels %.2f%%"
+            % (
+                float(motion.get("media") or 0),
+                float(motion.get("pixels_alterados") or 0),
+            )
+        )
+    lines.extend(["", "🎥 Fonte: %s" % source, "➡️ Acao: %s" % action])
+    if audit.get("economizou_api"):
+        lines.append("💡 API Gemini nao foi chamada pela regra de economia.")
+    return "\n".join(lines)
+
+
+def run_visual_auditor(image_path, item, mode="produto", force_api=False, cupom="", video_path=None):
+    cmd = [
+        "/opt/pdv-visual-auditor/venv/bin/python",
+        "/opt/pdv-visual-auditor/pdv_visual_auditor.py",
+        "--imagem",
+        str(image_path),
+        "--cupom",
+        str(cupom),
+        "--produto",
+        item.get("desc", ""),
+        "--valor",
+        "%.2f" % item_unit_value(item),
+        "--quantidade",
+        str(qty_number(item.get("qty")) or 1),
+        "--modo",
+        mode,
+    ]
+    if force_api:
+        cmd.append("--forcar-api")
+    if video_path:
+        cmd.extend(["--video", str(video_path)])
+    result = subprocess.run(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=90,
+        check=False,
+    )
+    if result.returncode != 0 and not result.stdout.strip():
+        return {
+            "resultado": "NAO_ANALISADO",
+            "confianca": None,
+            "o_que_aparece_na_imagem": "",
+            "comparacao_pdv": "A auditoria visual nao foi executada.",
+            "possivel_divergencia": "",
+            "erro_tecnico": (result.stderr or "erro desconhecido")[:300],
+            "acao_recomendada": "revisar gravacao",
+        }
+    return json.loads(result.stdout)
+
+
+def visual_audit_product(args, cupom, term):
+    _, by_number, _ = read_sales(args)
+    cup = by_number.get(str(cupom).strip())
+    if not cup:
+        return {"text": "Nao achei o cupom %s em %s." % (cupom, date_label(query_date(args)))}
+
+    term_low = normalize_text(term)
+    matches = [
+        item for item in cup["items"]
+        if term_low in normalize_text(item["desc"]) or term_low in normalize_text(item["code"])
+    ]
+    if not matches:
+        return {"text": "Nao achei '%s' no cupom %s." % (term, cupom)}
+
+    item = matches[0]
+    request_id = save_visual_video_request(args, cupom, item)
+    video_keyboard = visual_video_keyboard(request_id)
+    unit_value = item_unit_value(item)
+    needs_image = unit_value >= 8.0 or product_has_risk_word(item.get("desc", ""))
+
+    event = None
+    if needs_image:
+        event = imhdx_photo_for_item(args, cupom, item)
+        if not event:
+            event = find_photo_for_item(args, item)
+            if event:
+                try:
+                    event["imagem"] = overlay_pdv_caption(args, event["imagem"], cupom, item, "auditor local")
+                except Exception:
+                    pass
+        if not event:
+            response = {
+                "text": (
+                    "🔎 Auditoria visual\n\n"
+                    "Achei o item, mas nao consegui gerar a foto do iMHDX perto do horario.\n"
+                    "Cupom %s %s - %s x %s - %s"
+                ) % (cupom, item["time"], item["qty"], item["desc"].title(), money_br(item["value"]))
+            }
+            response["reply_markup"] = video_keyboard
+            return response
+        image_path = event["imagem"]
+        source = event.get("fonte", "iMHDX")
+    else:
+        image_path = "/tmp/imagem_nao_usada.jpg"
+        source = "regra local"
+
+    try:
+        audit = run_visual_auditor(image_path, item, cupom=cupom)
+    except subprocess.TimeoutExpired:
+        audit = {
+            "resultado": "NAO_ANALISADO",
+            "confianca": None,
+            "o_que_aparece_na_imagem": "",
+            "comparacao_pdv": "A auditoria visual nao foi executada.",
+            "possivel_divergencia": "",
+            "erro_tecnico": "Auditor visual excedeu o tempo limite.",
+            "acao_recomendada": "revisar gravacao",
+        }
+    except Exception as exc:
+        audit = {
+            "resultado": "NAO_ANALISADO",
+            "confianca": None,
+            "o_que_aparece_na_imagem": "",
+            "comparacao_pdv": "A auditoria visual nao foi executada.",
+            "possivel_divergencia": "",
+            "erro_tecnico": "%s: %s" % (type(exc).__name__, str(exc)[:200]),
+            "acao_recomendada": "revisar gravacao",
+        }
+
+    caption = format_visual_audit_caption(args, cupom, item, audit, source)
+    if event and event.get("imagem"):
+        return {
+            "photo": event["imagem"],
+            "caption": caption,
+            "reply_markup": video_keyboard,
+        }
+    return {"text": caption, "reply_markup": video_keyboard}
+
+
+def product_has_risk_word(product):
+    clean = normalize_text(product)
+    words = (
+        "CARNE",
+        "CERV",
+        "WHISKY",
+        "AZEITE",
+        "SABAO",
+        "REFRIGERANTE",
+        "REFRI",
+    )
+    return any(word in clean for word in words)
 
 
 def product_photo_for_item(args, cupom, item):
@@ -1675,6 +2365,7 @@ def _save_alert_feedback(alert_id, confirmed):
         "image": alert.get("image") if alert else None,
         "motivo": alert.get("motivo_llava") if alert else None,
         "pdv": alert.get("pdv") if alert else None,
+        "tipo_furto": alert.get("tipo_furto") if alert else None,
     }
     with (feedback_dir / fname).open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -1688,6 +2379,8 @@ def _save_alert_feedback(alert_id, confirmed):
 def handle_command(args, text):
     text = normalize_button_text(text)
     parts = text.strip().split(maxsplit=1)
+    if not parts:
+        return ""
     cmd = parts[0].lower()
     rest = parts[1].strip() if len(parts) > 1 else ""
     if cmd in ("/ajuda", "/help", "/start", "/menu"):
@@ -1722,6 +2415,11 @@ def handle_command(args, text):
         if not parsed:
             return "Use: /foto 216657 arroz\nOu: arroz 216657"
         return product_photo(args, parsed[0], parsed[1])
+    if cmd in ("/auditar", "/auditoria"):
+        parsed = split_cupom_product(rest)
+        if not parsed:
+            return "Use: /auditar 216657 carne\nOu: carne 216657"
+        return visual_audit_product(args, parsed[0], parsed[1])
     return ""
 
 
@@ -1738,6 +2436,8 @@ def normalize_button_text(text):
         "ultimo cupom": "/ultimo",
         "buscar produto": "/buscar",
         "foto produto": "/foto",
+        "auditar produto": "/auditar",
+        "auditoria visual": "/auditar",
         "ensinar produtos": "/ensinar",
         "produto mais vendido": "/maisvendido",
         "ia": "/ia",
@@ -1850,6 +2550,35 @@ def handle_callback(args, callback):
             edit_message(args, chat_id, message_id, result)
             answer_callback(args, callback_id)
         return
+    if data.startswith("visual_video:"):
+        request_id = data.split(":", 1)[1]
+        answer_callback(args, callback_id, "Preparando video de 20 segundos...")
+        send_visual_video(args, chat_id, request_id)
+        return
+    if data.startswith("occ_save:"):
+        request_id = data.split(":", 1)[1]
+        saved_video = save_occurrence(args, request_id)
+        if not saved_video:
+            answer_callback(args, callback_id, "Ocorrencia pendente nao encontrada.")
+            return
+        answer_callback(args, callback_id, "Ocorrencia salva no PDV.")
+        edit_message_keyboard(
+            args,
+            chat_id,
+            message_id,
+            {
+                "inline_keyboard": [
+                    [{"text": "✅ Ocorrencia salva", "callback_data": "noop"}]
+                ]
+            },
+        )
+        return
+    if data.startswith("occ_ignore:"):
+        request_id = data.split(":", 1)[1]
+        ignore_occurrence(args, request_id)
+        answer_callback(args, callback_id, "Video ignorado.")
+        delete_message(args, chat_id, message_id)
+        return
     if data.startswith("learncat:"):
         category = data.split(":", 1)[1]
         if category not in PRODUCT_CATEGORIES:
@@ -1935,6 +2664,9 @@ def main():
                     elif normalized == "/foto":
                         set_pending_mode(args, chat.get("id"), "photo")
                         answer = "Envie o cupom e o produto. Exemplo: 216657 arroz."
+                    elif normalized == "/auditar":
+                        set_pending_mode(args, chat.get("id"), "audit")
+                        answer = "Envie o cupom e o produto para auditar. Exemplo: 216657 carne."
                     elif not text.startswith("/"):
                         mode = pop_pending_mode(args, chat.get("id"))
                         if mode == "search":
@@ -1953,6 +2685,12 @@ def main():
                                 answer = "Envie assim: arroz 216657."
                             else:
                                 answer = product_photo(args, parsed[0], parsed[1])
+                        elif mode == "audit":
+                            parsed = split_cupom_product(text)
+                            if not parsed:
+                                answer = "Envie assim: carne 216657."
+                            else:
+                                answer = visual_audit_product(args, parsed[0], parsed[1])
                         else:
                             if normalized.startswith("/buscar ") or normalized.startswith("/produto "):
                                 save_product_search(args, chat.get("id"), clean_search_term(normalized.split(maxsplit=1)[1]))

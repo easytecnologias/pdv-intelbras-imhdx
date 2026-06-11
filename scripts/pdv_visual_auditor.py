@@ -816,6 +816,9 @@ def parse_args():
         action="store_true",
         help="Ignora apenas a regra local de valor; os limites de API continuam ativos",
     )
+    parser.add_argument(
+        "--video", default="", help="Caminho do clipe .mp4 do evento (opcional)"
+    )
     return parser.parse_args()
 
 
@@ -823,6 +826,7 @@ def registrar_resultado(args, resultado):
     registro = {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
         "imagem": str(args.imagem),
+        "video": str(args.video) if args.video else None,
         "cupom": str(args.cupom),
         "produto": str(args.produto),
         "valor_unitario": float(args.valor),

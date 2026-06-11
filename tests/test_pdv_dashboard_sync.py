@@ -1,4 +1,6 @@
 import json
+from datetime import datetime, timedelta
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -165,6 +167,138 @@ def test_enviar_imagem_evento_erro_de_rede_nao_propaga(tmp_path):
     imagem.write_bytes(b"fake-jpg")
     with patch.object(sync.requests, "post", side_effect=Exception("boom")):
         sync.enviar_imagem_evento("https://api.example", "token123", 42, str(imagem), 10)
+
+
+def test_enviar_eventos_envia_video_quando_disponivel(tmp_path):
+    video = tmp_path / "evento.mp4"
+    video.write_bytes(b"fake-mp4")
+    eventos = [{"timestamp": "1", "video": str(video), "resultado": {"resultado": "NAO_CONFERE"}}]
+
+    mock_resposta = type("Resp", (), {"json": lambda self: {"id": 42}})()
+    with patch.object(sync.requests, "post", return_value=mock_resposta) as mock_post:
+        sync.enviar_eventos("https://api.example", "token123", eventos, "001", 10)
+
+    assert mock_post.call_count == 2
+    args, kwargs = mock_post.call_args
+    assert args[0] == "https://api.example/api/v1/events/42/video"
+    assert kwargs["headers"] == {"Authorization": "Bearer token123"}
+    assert "file" in kwargs["files"]
+
+
+def test_enviar_video_evento_arquivo_inexistente_nao_chama_api(tmp_path):
+    with patch.object(sync.requests, "post") as mock_post:
+        sync.enviar_video_evento("https://api.example", "token123", 42, str(tmp_path / "nao-existe.mp4"), 10)
+    mock_post.assert_not_called()
+
+
+def test_enviar_video_evento_erro_de_rede_nao_propaga(tmp_path):
+    video = tmp_path / "evento.mp4"
+    video.write_bytes(b"fake-mp4")
+    with patch.object(sync.requests, "post", side_effect=Exception("boom")):
+        sync.enviar_video_evento("https://api.example", "token123", 42, str(video), 10)
+
+
+# ---------------------------------------------------------------------------
+# retry tardio de video (videos pendentes)
+# ---------------------------------------------------------------------------
+
+def test_enviar_eventos_sem_video_adiciona_pendente(tmp_path):
+    pendentes_file = tmp_path / "pendentes.jsonl"
+    eventos = [{"timestamp": "2026-06-11T10:00:00", "resultado": {"resultado": "NAO_CONFERE"}}]
+
+    mock_resposta = type("Resp", (), {"json": lambda self: {"id": 42}})()
+    with patch.object(sync.requests, "post", return_value=mock_resposta):
+        sync.enviar_eventos("https://api.example", "token123", eventos, "001", 10, str(pendentes_file))
+
+    itens = sync.ler_videos_pendentes(str(pendentes_file))
+    assert itens == [{"evento_id": 42, "timestamp": "2026-06-11T10:00:00", "tentativas": 0}]
+
+
+def test_enviar_eventos_com_video_nao_adiciona_pendente(tmp_path):
+    pendentes_file = tmp_path / "pendentes.jsonl"
+    video = tmp_path / "evento.mp4"
+    video.write_bytes(b"fake-mp4")
+    eventos = [{"timestamp": "2026-06-11T10:00:00", "video": str(video), "resultado": {"resultado": "NAO_CONFERE"}}]
+
+    mock_resposta = type("Resp", (), {"json": lambda self: {"id": 42}})()
+    with patch.object(sync.requests, "post", return_value=mock_resposta):
+        sync.enviar_eventos("https://api.example", "token123", eventos, "001", 10, str(pendentes_file))
+
+    assert sync.ler_videos_pendentes(str(pendentes_file)) == []
+
+
+def test_processar_videos_pendentes_aguarda_idade_minima(tmp_path):
+    pendentes_file = tmp_path / "pendentes.jsonl"
+    timestamp_recente = datetime.now().isoformat(timespec="seconds")
+    sync.gravar_videos_pendentes(str(pendentes_file), [{"evento_id": 42, "timestamp": timestamp_recente, "tentativas": 0}])
+
+    args = argparse_namespace(tmp_path, pendentes_file)
+    with patch.object(sync.bot, "baixar_clipe_imhdx") as mock_baixar:
+        sync.processar_videos_pendentes(args)
+
+    mock_baixar.assert_not_called()
+    assert sync.ler_videos_pendentes(str(pendentes_file)) == [
+        {"evento_id": 42, "timestamp": timestamp_recente, "tentativas": 0}
+    ]
+
+
+def test_processar_videos_pendentes_sucesso(tmp_path):
+    pendentes_file = tmp_path / "pendentes.jsonl"
+    timestamp_antigo = (datetime.now() - timedelta(seconds=200)).isoformat(timespec="seconds")
+    sync.gravar_videos_pendentes(str(pendentes_file), [{"evento_id": 42, "timestamp": timestamp_antigo, "tentativas": 0}])
+
+    args = argparse_namespace(tmp_path, pendentes_file)
+    mock_resposta = type("Resp", (), {"json": lambda self: {"id": 42}})()
+
+    def fake_baixar(args, event_dt, channel, output_path):
+        Path(output_path).write_bytes(b"fake-mp4")
+
+    with patch.object(sync.bot, "baixar_clipe_imhdx", side_effect=fake_baixar) as mock_baixar, \
+            patch.object(sync.requests, "post", return_value=mock_resposta) as mock_post:
+        sync.processar_videos_pendentes(args)
+
+    mock_baixar.assert_called_once()
+    mock_post.assert_called_once()
+    assert sync.ler_videos_pendentes(str(pendentes_file)) == []
+
+
+def test_processar_videos_pendentes_falha_incrementa_tentativas(tmp_path):
+    pendentes_file = tmp_path / "pendentes.jsonl"
+    timestamp_antigo = (datetime.now() - timedelta(seconds=200)).isoformat(timespec="seconds")
+    sync.gravar_videos_pendentes(str(pendentes_file), [{"evento_id": 42, "timestamp": timestamp_antigo, "tentativas": 0}])
+
+    args = argparse_namespace(tmp_path, pendentes_file)
+    with patch.object(sync.bot, "baixar_clipe_imhdx", side_effect=RuntimeError("indisponivel")):
+        sync.processar_videos_pendentes(args)
+
+    itens = sync.ler_videos_pendentes(str(pendentes_file))
+    assert itens == [{"evento_id": 42, "timestamp": timestamp_antigo, "tentativas": 1}]
+
+
+def test_processar_videos_pendentes_desiste_apos_max_tentativas(tmp_path):
+    pendentes_file = tmp_path / "pendentes.jsonl"
+    timestamp_antigo = (datetime.now() - timedelta(seconds=200)).isoformat(timespec="seconds")
+    sync.gravar_videos_pendentes(
+        str(pendentes_file),
+        [{"evento_id": 42, "timestamp": timestamp_antigo, "tentativas": sync.VIDEO_RETRY_MAX_TENTATIVAS - 1}],
+    )
+
+    args = argparse_namespace(tmp_path, pendentes_file)
+    with patch.object(sync.bot, "baixar_clipe_imhdx", side_effect=RuntimeError("indisponivel")):
+        sync.processar_videos_pendentes(args)
+
+    assert sync.ler_videos_pendentes(str(pendentes_file)) == []
+
+
+def argparse_namespace(tmp_path, pendentes_file):
+    return type("Args", (), {
+        "api_url": "https://api.example",
+        "api_token": "token123",
+        "timeout": 10,
+        "pending_videos_file": str(pendentes_file),
+        "video_retry_dir": str(tmp_path / "videos_retry"),
+        "imhdx_channel": 1,
+    })()
 
 
 @pytest.mark.parametrize(

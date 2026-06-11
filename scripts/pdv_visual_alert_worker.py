@@ -310,10 +310,12 @@ def live_event_from_frames(args, cupom, item, frame_paths):
         item,
         source,
     )
+    video_path = video_clip_for_item(args, item, stamp, out_dir)
     return {
         "imagem": stamped_path,
         "imagem_original": str(original_path),
         "auditoria_imagem": str(sequence_path),
+        "video": video_path,
         "frames_analisados": len(panels),
         "movimento_scanner": bot.sequence_motion_score(
             sequence_path,
@@ -321,6 +323,24 @@ def live_event_from_frames(args, cupom, item, frame_paths):
         ),
         "fonte": source,
     }
+
+
+def video_clip_for_item(args, item, stamp, out_dir):
+    try:
+        event_dt = bot.datetime.strptime(
+            "%s %s" % (bot.query_date(args).strftime("%Y-%m-%d"), item.get("time", "")),
+            "%Y-%m-%d %H:%M:%S",
+        )
+    except Exception:
+        return None
+
+    video_path = out_dir / ("%s.mp4" % stamp)
+    try:
+        bot.baixar_clipe_imhdx(args, event_dt, args.imhdx_channel, video_path)
+    except Exception as exc:
+        log("clipe de video indisponivel: %s" % exc)
+        return None
+    return str(video_path)
 
 
 def audit_exact_item(args, cup, item, live_frames=None):
@@ -380,6 +400,7 @@ def audit_exact_item(args, cup, item, live_frames=None):
             mode="produto",
             force_api=bool(item.get("consultations")),
             cupom=cupom,
+            video_path=event.get("video"),
         )
     elif not PHANTOM_ENABLED or passage_detected:
         audit = {
@@ -399,6 +420,7 @@ def audit_exact_item(args, cup, item, live_frames=None):
             item,
             mode="presenca",
             force_api=True,
+            video_path=event.get("video"),
         )
         if audit.get("tipo_alerta") == "REGISTRO_SEM_PASSAGEM_VISUAL":
             audit["alert_reason"] = "REGISTRO SEM PASSAGEM VISUAL"

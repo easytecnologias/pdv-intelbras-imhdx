@@ -1,3 +1,4 @@
+import argparse
 import json
 import time
 
@@ -318,3 +319,76 @@ def test_reservar_chamada_api_respeita_limite_por_hora(tmp_path, monkeypatch):
 
 def test_gerar_recorte_scanner_pula_imagens_de_sequencia():
     assert auditor.gerar_recorte_scanner("/tmp/foo_sequence.jpg") is None
+
+
+# ---------------------------------------------------------------------------
+# parse_args / registrar_resultado (campo "video")
+# ---------------------------------------------------------------------------
+
+def test_parse_args_aceita_video(monkeypatch):
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "pdv_visual_auditor.py",
+            "--imagem", "/tmp/foto.jpg",
+            "--produto", "Bala Halls",
+            "--valor", "1.50",
+            "--quantidade", "2",
+            "--video", "/tmp/evento.mp4",
+        ],
+    )
+    args = auditor.parse_args()
+    assert args.video == "/tmp/evento.mp4"
+
+
+def test_parse_args_video_padrao_vazio(monkeypatch):
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "pdv_visual_auditor.py",
+            "--imagem", "/tmp/foto.jpg",
+            "--produto", "Bala Halls",
+            "--valor", "1.50",
+            "--quantidade", "2",
+        ],
+    )
+    args = auditor.parse_args()
+    assert args.video == ""
+
+
+def test_registrar_resultado_inclui_video(tmp_path, monkeypatch):
+    results_path = tmp_path / "results.jsonl"
+    monkeypatch.setattr(auditor, "RESULTS_PATH", results_path)
+
+    args = argparse.Namespace(
+        imagem="/tmp/foto.jpg",
+        video="/tmp/evento.mp4",
+        cupom="221548",
+        produto="Bala Halls",
+        valor=1.50,
+        quantidade=2,
+        modo="produto",
+    )
+    auditor.registrar_resultado(args, {"resultado": "CONFERE"})
+
+    linha = json.loads(results_path.read_text(encoding="utf-8").strip())
+    assert linha["video"] == "/tmp/evento.mp4"
+
+
+def test_registrar_resultado_video_vazio_vira_none(tmp_path, monkeypatch):
+    results_path = tmp_path / "results.jsonl"
+    monkeypatch.setattr(auditor, "RESULTS_PATH", results_path)
+
+    args = argparse.Namespace(
+        imagem="/tmp/foto.jpg",
+        video="",
+        cupom="221548",
+        produto="Bala Halls",
+        valor=1.50,
+        quantidade=2,
+        modo="produto",
+    )
+    auditor.registrar_resultado(args, {"resultado": "CONFERE"})
+
+    linha = json.loads(results_path.read_text(encoding="utf-8").strip())
+    assert linha["video"] is None

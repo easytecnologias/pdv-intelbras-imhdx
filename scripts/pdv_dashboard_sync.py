@@ -5,15 +5,24 @@ import argparse
 import json
 import os
 import subprocess
+import sys
+from datetime import datetime
 from pathlib import Path
 
 import requests
+
+sys.path.insert(0, "/opt/pdv-telegram-assistant")
+
+import pdv_telegram_assistant as bot  # noqa: E402
 
 SERVICOS_HEALTH = (
     "pdv-intelbras-bridge",
     "pdv-telegram-assistant",
     "pdv-visual-alert-worker",
 )
+
+VIDEO_RETRY_MIN_AGE_SECONDS = 90
+VIDEO_RETRY_MAX_TENTATIVAS = 5
 
 
 def parse_args():
@@ -36,6 +45,20 @@ def parse_args():
     parser.add_argument(
         "--timeout", type=float, default=float(os.environ.get("DASHBOARD_SYNC_TIMEOUT", "10"))
     )
+    parser.add_argument(
+        "--pending-videos-file",
+        default=os.environ.get(
+            "DASHBOARD_PENDING_VIDEOS_FILE", "/var/lib/pdv-visual-auditor/dashboard_pending_videos.jsonl"
+        ),
+    )
+    parser.add_argument(
+        "--video-retry-dir",
+        default=os.environ.get("DASHBOARD_VIDEO_RETRY_DIR", "/var/lib/pdv-visual-auditor/videos_retry"),
+    )
+    parser.add_argument("--imhdx-host", default=os.environ.get("IMHDX_HOST", ""))
+    parser.add_argument("--imhdx-user", default=os.environ.get("IMHDX_USER", ""))
+    parser.add_argument("--imhdx-pass", default=os.environ.get("IMHDX_PASS", ""))
+    parser.add_argument("--imhdx-channel", type=int, default=int(os.environ.get("IMHDX_CHANNEL", "1")))
     return parser.parse_args()
 
 
@@ -115,7 +138,24 @@ def enviar_imagem_evento(api_url, api_token, evento_id, imagem_path, timeout):
         pass
 
 
-def enviar_eventos(api_url, api_token, eventos, pdv_station, timeout):
+def enviar_video_evento(api_url, api_token, evento_id, video_path, timeout):
+    caminho = Path(video_path)
+    if not caminho.is_file():
+        return
+    headers = {"Authorization": f"Bearer {api_token}"}
+    try:
+        with caminho.open("rb") as arquivo:
+            requests.post(
+                f"{api_url}/api/v1/events/{evento_id}/video",
+                files={"file": (caminho.name, arquivo, "video/mp4")},
+                headers=headers,
+                timeout=timeout,
+            )
+    except Exception:
+        pass
+
+
+def enviar_eventos(api_url, api_token, eventos, pdv_station, timeout, pending_videos_file=None):
     if not eventos or not api_url or not api_token:
         return
     headers = {"Authorization": f"Bearer {api_token}"}
@@ -133,6 +173,82 @@ def enviar_eventos(api_url, api_token, eventos, pdv_station, timeout):
         imagem = registro.get("imagem")
         if evento_id and imagem:
             enviar_imagem_evento(api_url, api_token, evento_id, imagem, timeout)
+        video = registro.get("video")
+        if evento_id and video:
+            enviar_video_evento(api_url, api_token, evento_id, video, timeout)
+        elif evento_id and pending_videos_file:
+            adicionar_video_pendente(pending_videos_file, evento_id, registro.get("timestamp"))
+
+
+def ler_videos_pendentes(path):
+    arquivo = Path(path)
+    if not arquivo.is_file():
+        return []
+    itens = []
+    for linha in arquivo.read_text(encoding="utf-8").splitlines():
+        linha = linha.strip()
+        if not linha:
+            continue
+        try:
+            itens.append(json.loads(linha))
+        except json.JSONDecodeError:
+            continue
+    return itens
+
+
+def gravar_videos_pendentes(path, itens):
+    arquivo = Path(path)
+    if not itens:
+        if arquivo.is_file():
+            arquivo.unlink()
+        return
+    arquivo.parent.mkdir(parents=True, exist_ok=True)
+    with arquivo.open("w", encoding="utf-8") as handle:
+        for item in itens:
+            handle.write(json.dumps(item, ensure_ascii=False) + "\n")
+
+
+def adicionar_video_pendente(path, evento_id, timestamp):
+    if not timestamp:
+        return
+    itens = ler_videos_pendentes(path)
+    itens.append({"evento_id": evento_id, "timestamp": timestamp, "tentativas": 0})
+    gravar_videos_pendentes(path, itens)
+
+
+def processar_videos_pendentes(args):
+    if not args.api_url or not args.api_token:
+        return
+    itens = ler_videos_pendentes(args.pending_videos_file)
+    if not itens:
+        return
+
+    agora = datetime.now()
+    restantes = []
+    for item in itens:
+        try:
+            event_dt = datetime.fromisoformat(item["timestamp"])
+        except Exception:
+            continue
+
+        if (agora - event_dt).total_seconds() < VIDEO_RETRY_MIN_AGE_SECONDS:
+            restantes.append(item)
+            continue
+
+        evento_id = item["evento_id"]
+        video_path = Path(args.video_retry_dir) / f"{evento_id}.mp4"
+        video_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            bot.baixar_clipe_imhdx(args, event_dt, args.imhdx_channel, video_path)
+        except Exception:
+            item["tentativas"] = item.get("tentativas", 0) + 1
+            if item["tentativas"] < VIDEO_RETRY_MAX_TENTATIVAS:
+                restantes.append(item)
+            continue
+
+        enviar_video_evento(args.api_url, args.api_token, evento_id, video_path, args.timeout)
+
+    gravar_videos_pendentes(args.pending_videos_file, restantes)
 
 
 def estado_servico(nome_servico):
@@ -197,8 +313,11 @@ def main():
     args = parse_args()
     garantir_offset_inicial(args.results_file, args.offset_file)
     eventos, offset = ler_novos_eventos(args.results_file, args.offset_file)
-    enviar_eventos(args.api_url, args.api_token, eventos, args.pdv_station, args.timeout)
+    enviar_eventos(
+        args.api_url, args.api_token, eventos, args.pdv_station, args.timeout, args.pending_videos_file
+    )
     write_offset(args.offset_file, offset)
+    processar_videos_pendentes(args)
     enviar_health(args.api_url, args.api_token, args.pdv_station, args.timeout)
 
 
