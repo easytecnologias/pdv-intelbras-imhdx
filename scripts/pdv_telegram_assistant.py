@@ -23,6 +23,12 @@ from PIL import Image, ImageChops, ImageDraw, ImageFont, ImageStat
 LINE_RE = re.compile(r"^(?P<time>\d{2}:\d{2}:\d{2}):(?P<event>[A-Z]+)\s*\|\s*(?P<body>.*)$")
 FIELD_RE = re.compile(r"(\w+):\s*([^|]+)")
 SEARCH_PAGE_SIZE = 10
+VISUAL_RESULTS_PATH = Path(
+    os.environ.get("VISUAL_RESULTS_PATH", "/var/lib/pdv-visual-auditor/results.jsonl")
+)
+GROQ_PRECO_INPUT_USD_POR_MILHAO = float(os.environ.get("GROQ_PRECO_INPUT_USD_POR_MILHAO", "0.11"))
+GROQ_PRECO_OUTPUT_USD_POR_MILHAO = float(os.environ.get("GROQ_PRECO_OUTPUT_USD_POR_MILHAO", "0.34"))
+GROQ_USD_BRL = float(os.environ.get("GROQ_USD_BRL", "5.50"))
 PRODUCT_CATEGORIES = [
     "bebida",
     "biscoito",
@@ -197,7 +203,7 @@ def main_keyboard():
             [{"text": "Cupom"}, {"text": "Ultimo cupom"}],
             [{"text": "Buscar produto"}, {"text": "Foto produto"}],
             [{"text": "Auditar produto"}, {"text": "Produto mais vendido"}],
-            [{"text": "Data"}],
+            [{"text": "Data"}, {"text": "Custo API"}],
         ],
         "resize_keyboard": True,
         "one_time_keyboard": False,
@@ -2069,6 +2075,79 @@ def status(args):
     return "\n".join(lines)
 
 
+def _ler_resultados_visuais():
+    if not VISUAL_RESULTS_PATH.is_file():
+        return []
+    registros = []
+    for linha in VISUAL_RESULTS_PATH.read_text(encoding="utf-8").splitlines():
+        linha = linha.strip()
+        if not linha:
+            continue
+        try:
+            registros.append(json.loads(linha))
+        except Exception:
+            continue
+    return registros
+
+
+def _custo_periodo(registros, inicio):
+    chamadas = 0
+    tokens_entrada = 0
+    tokens_saida = 0
+    for registro in registros:
+        try:
+            ts = datetime.fromisoformat(registro["timestamp"])
+        except Exception:
+            continue
+        if ts < inicio:
+            continue
+        resultado = registro.get("resultado") or {}
+        if "tokens_entrada" not in resultado:
+            continue
+        chamadas += 1
+        tokens_entrada += resultado.get("tokens_entrada") or 0
+        tokens_saida += resultado.get("tokens_saida") or 0
+    custo_usd = (
+        tokens_entrada / 1_000_000 * GROQ_PRECO_INPUT_USD_POR_MILHAO
+        + tokens_saida / 1_000_000 * GROQ_PRECO_OUTPUT_USD_POR_MILHAO
+    )
+    return chamadas, tokens_entrada, tokens_saida, custo_usd
+
+
+def custo_summary(args):
+    registros = _ler_resultados_visuais()
+    agora = datetime.now()
+    inicio_dia = agora.replace(hour=0, minute=0, second=0, microsecond=0)
+    inicio_mes = agora.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+    chamadas_dia, tok_in_dia, tok_out_dia, custo_dia = _custo_periodo(registros, inicio_dia)
+    chamadas_mes, tok_in_mes, tok_out_mes, custo_mes = _custo_periodo(registros, inicio_mes)
+
+    dias_decorridos = max((agora - inicio_mes).days + 1, 1)
+    media_diaria_usd = custo_mes / dias_decorridos
+    dias_no_mes = calendar.monthrange(agora.year, agora.month)[1]
+    projecao_mes_usd = media_diaria_usd * dias_no_mes
+
+    return "\n".join([
+        "💳 Custo da auditoria visual (Groq)",
+        "",
+        "📅 Hoje",
+        "Chamadas reais a API: %d" % chamadas_dia,
+        "Tokens entrada/saida: %d / %d" % (tok_in_dia, tok_out_dia),
+        "Custo: US$ %.4f (R$ %.2f)" % (custo_dia, custo_dia * GROQ_USD_BRL),
+        "",
+        "🗓️ %s/%d (mes ate agora)" % (MONTHS_BR[agora.month], agora.year),
+        "Chamadas reais a API: %d" % chamadas_mes,
+        "Tokens entrada/saida: %d / %d" % (tok_in_mes, tok_out_mes),
+        "Custo ate agora: US$ %.4f (R$ %.2f)" % (custo_mes, custo_mes * GROQ_USD_BRL),
+        "Projecao do mes: US$ %.2f (R$ %.2f)" % (projecao_mes_usd, projecao_mes_usd * GROQ_USD_BRL),
+        "",
+        "Tabela Groq: US$ %.2f / 1M tokens entrada, US$ %.2f / 1M tokens saida"
+        % (GROQ_PRECO_INPUT_USD_POR_MILHAO, GROQ_PRECO_OUTPUT_USD_POR_MILHAO),
+        "Cotacao usada: US$ 1 = R$ %.2f" % GROQ_USD_BRL,
+    ])
+
+
 def help_text():
     return "Menu atualizado. Use os botoes fixos abaixo."
 
@@ -2389,6 +2468,8 @@ def handle_command(args, text):
         return "O modulo antifurto foi removido. Use os botoes de consulta do caixa."
     if cmd == "/status":
         return status(args)
+    if cmd in ("/custo", "/custoapi", "/custo_api"):
+        return custo_summary(args)
     if cmd == "/data":
         if not rest:
             return "Use: /data 24/05/2026\nOu toque em Data e envie hoje, ontem ou dd/mm/aaaa."
@@ -2444,6 +2525,7 @@ def normalize_button_text(text):
         "modelo": "/ia",
         "antifurto": "/ia",
         "o que aprendeu": "/ia",
+        "custo api": "/custo",
     }
     return mapping.get(clean.lower(), clean)
 

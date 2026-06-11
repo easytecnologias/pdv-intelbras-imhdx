@@ -301,6 +301,122 @@ def argparse_namespace(tmp_path, pendentes_file):
     })()
 
 
+# ---------------------------------------------------------------------------
+# vendas do dia (Espiao FECHACUPOM)
+# ---------------------------------------------------------------------------
+
+def _vendas_args(tmp_path, **overrides):
+    base = {
+        "api_url": "https://api.example",
+        "api_token": "token123",
+        "pdv_station": "001",
+        "pdv_base_dir": str(tmp_path),
+        "state_dir": str(tmp_path / "state"),
+        "timeout": 10,
+        "sales_backfill_days": 30,
+        "sales_synced_file": str(tmp_path / "state" / "dashboard_sales_synced"),
+    }
+    base.update(overrides)
+    return type("Args", (), base)()
+
+
+def _escrever_espiao(args, conteudo, dt=None):
+    caminho = sync.bot.spy_path(args, dt)
+    caminho.parent.mkdir(parents=True, exist_ok=True)
+    caminho.write_text(conteudo, encoding="latin-1")
+
+
+def test_coletar_vendas_soma_fechacupom(tmp_path):
+    args = _vendas_args(tmp_path)
+    _escrever_espiao(args, (
+        "07:06:27:FECHACUPOM | Cod: 218450 | Descricao: Fulano | VlTotal: 21.05|\n"
+        "07:08:50:FECHACUPOM | Cod: 218451 | Descricao: Fulano | VlTotal: 153.16|\n"
+        "07:10:05:OUTRA LINHA QUALQUER\n"
+    ))
+
+    total, cupons = sync.coletar_vendas(args)
+    assert cupons == 2
+    assert round(total, 2) == 174.21
+
+
+def test_coletar_vendas_sem_arquivo_retorna_zero(tmp_path):
+    args = _vendas_args(tmp_path)
+    assert sync.coletar_vendas(args) == (0.0, 0)
+
+
+def test_enviar_vendas_chama_api(tmp_path):
+    args = _vendas_args(tmp_path)
+    _escrever_espiao(args, "07:06:27:FECHACUPOM | Cod: 218450 | Descricao: Fulano | VlTotal: 21.05|\n")
+
+    with patch.object(sync.requests, "post") as mock_post:
+        sync.enviar_vendas(args)
+
+    mock_post.assert_called_once()
+    args_chamada, kwargs = mock_post.call_args
+    assert args_chamada[0] == "https://api.example/api/v1/sales"
+    assert kwargs["json"] == {
+        "pdv": "001",
+        "total": 21.05,
+        "cupons": 1,
+        "data": datetime.now().strftime("%Y-%m-%d"),
+    }
+
+
+def test_enviar_vendas_sem_config_nao_chama_api(tmp_path):
+    args = _vendas_args(tmp_path, api_url="", api_token="")
+    with patch.object(sync.requests, "post") as mock_post:
+        sync.enviar_vendas(args)
+    mock_post.assert_not_called()
+
+
+def test_enviar_vendas_faz_backfill_de_dias_anteriores(tmp_path):
+    args = _vendas_args(tmp_path, sales_backfill_days=2)
+    hoje = datetime.now()
+    ontem = hoje - timedelta(days=1)
+
+    _escrever_espiao(args, "07:06:27:FECHACUPOM | Cod: 1 | Descricao: Fulano | VlTotal: 21.05|\n")
+    _escrever_espiao(args, "08:00:00:FECHACUPOM | Cod: 2 | Descricao: Fulano | VlTotal: 99.90|\n", dt=ontem)
+
+    with patch.object(sync.requests, "post") as mock_post:
+        sync.enviar_vendas(args)
+
+    assert mock_post.call_count == 2
+    payloads = [kwargs["json"] for _, kwargs in mock_post.call_args_list]
+    assert {"pdv": "001", "total": 21.05, "cupons": 1, "data": hoje.strftime("%Y-%m-%d")} in payloads
+    assert {"pdv": "001", "total": 99.90, "cupons": 1, "data": ontem.strftime("%Y-%m-%d")} in payloads
+
+    assert ontem.strftime("%Y-%m-%d") in sync.ler_datas_sincronizadas(args.sales_synced_file)
+    assert hoje.strftime("%Y-%m-%d") not in sync.ler_datas_sincronizadas(args.sales_synced_file)
+
+
+def test_enviar_vendas_pula_dia_ja_sincronizado(tmp_path):
+    args = _vendas_args(tmp_path, sales_backfill_days=1)
+    hoje = datetime.now()
+    ontem = hoje - timedelta(days=1)
+
+    _escrever_espiao(args, "07:06:27:FECHACUPOM | Cod: 1 | Descricao: Fulano | VlTotal: 21.05|\n")
+    _escrever_espiao(args, "08:00:00:FECHACUPOM | Cod: 2 | Descricao: Fulano | VlTotal: 99.90|\n", dt=ontem)
+    sync.marcar_data_sincronizada(args.sales_synced_file, ontem.strftime("%Y-%m-%d"))
+
+    with patch.object(sync.requests, "post") as mock_post:
+        sync.enviar_vendas(args)
+
+    mock_post.assert_called_once()
+    assert mock_post.call_args[1]["json"]["data"] == hoje.strftime("%Y-%m-%d")
+
+
+def test_enviar_vendas_pula_dia_sem_arquivo_espiao(tmp_path):
+    args = _vendas_args(tmp_path, sales_backfill_days=1)
+    _escrever_espiao(args, "07:06:27:FECHACUPOM | Cod: 1 | Descricao: Fulano | VlTotal: 21.05|\n")
+
+    with patch.object(sync.requests, "post") as mock_post:
+        sync.enviar_vendas(args)
+
+    mock_post.assert_called_once()
+    ontem = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    assert ontem not in sync.ler_datas_sincronizadas(args.sales_synced_file)
+
+
 @pytest.mark.parametrize(
     "is_active_output,esperado",
     [

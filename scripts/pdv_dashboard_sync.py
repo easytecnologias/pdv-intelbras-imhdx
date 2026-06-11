@@ -4,9 +4,10 @@ com a API do dashboard Easy Auditoria."""
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import requests
@@ -23,6 +24,8 @@ SERVICOS_HEALTH = (
 
 VIDEO_RETRY_MIN_AGE_SECONDS = 90
 VIDEO_RETRY_MAX_TENTATIVAS = 5
+
+FECHACUPOM_RE = re.compile(r":FECHACUPOM \| Cod: \S+ \| Descricao:.*?\| VlTotal: ([\d.]+)\|")
 
 
 def parse_args():
@@ -59,6 +62,19 @@ def parse_args():
     parser.add_argument("--imhdx-user", default=os.environ.get("IMHDX_USER", ""))
     parser.add_argument("--imhdx-pass", default=os.environ.get("IMHDX_PASS", ""))
     parser.add_argument("--imhdx-channel", type=int, default=int(os.environ.get("IMHDX_CHANNEL", "1")))
+    parser.add_argument("--pdv-base-dir", default=os.environ.get("PDV_BASE_DIR", "/home/rpdv/frente"))
+    parser.add_argument("--state-dir", default=os.environ.get("BOT_STATE_DIR", "/var/lib/pdv-telegram-assistant"))
+    parser.add_argument(
+        "--sales-backfill-days",
+        type=int,
+        default=int(os.environ.get("DASHBOARD_SALES_BACKFILL_DAYS", "30")),
+    )
+    parser.add_argument(
+        "--sales-synced-file",
+        default=os.environ.get(
+            "DASHBOARD_SALES_SYNCED_FILE", "/var/lib/pdv-visual-auditor/dashboard_sales_synced"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -251,6 +267,78 @@ def processar_videos_pendentes(args):
     gravar_videos_pendentes(args.pending_videos_file, restantes)
 
 
+def coletar_vendas(args, dt=None):
+    caminho = bot.spy_path(args, dt)
+    if not caminho.is_file():
+        return 0.0, 0
+
+    total = 0.0
+    cupons = 0
+    with caminho.open("r", encoding="latin-1", errors="replace") as handle:
+        for linha in handle:
+            match = FECHACUPOM_RE.search(linha)
+            if not match:
+                continue
+            total += float(match.group(1))
+            cupons += 1
+    return total, cupons
+
+
+def ler_datas_sincronizadas(path):
+    arquivo = Path(path)
+    if not arquivo.is_file():
+        return set()
+    return set(arquivo.read_text().split())
+
+
+def marcar_data_sincronizada(path, data_str):
+    arquivo = Path(path)
+    arquivo.parent.mkdir(parents=True, exist_ok=True)
+    with arquivo.open("a") as handle:
+        handle.write(data_str + "\n")
+
+
+def _enviar_venda_dia(args, headers, dt):
+    total, cupons = coletar_vendas(args, dt)
+    requests.post(
+        f"{args.api_url}/api/v1/sales",
+        json={
+            "pdv": args.pdv_station,
+            "total": total,
+            "cupons": cupons,
+            "data": dt.strftime("%Y-%m-%d"),
+        },
+        headers=headers,
+        timeout=args.timeout,
+    )
+
+
+def enviar_vendas(args):
+    if not args.api_url or not args.api_token:
+        return
+    headers = {"Authorization": f"Bearer {args.api_token}"}
+    hoje = bot.query_date(args)
+
+    try:
+        _enviar_venda_dia(args, headers, hoje)
+    except Exception:
+        pass
+
+    sincronizadas = ler_datas_sincronizadas(args.sales_synced_file)
+    for dias_atras in range(1, args.sales_backfill_days + 1):
+        dt = hoje - timedelta(days=dias_atras)
+        data_str = dt.strftime("%Y-%m-%d")
+        if data_str in sincronizadas:
+            continue
+        if not bot.spy_path(args, dt).is_file():
+            continue
+        try:
+            _enviar_venda_dia(args, headers, dt)
+        except Exception:
+            continue
+        marcar_data_sincronizada(args.sales_synced_file, data_str)
+
+
 def estado_servico(nome_servico):
     try:
         saida = subprocess.run(
@@ -319,6 +407,7 @@ def main():
     write_offset(args.offset_file, offset)
     processar_videos_pendentes(args)
     enviar_health(args.api_url, args.api_token, args.pdv_station, args.timeout)
+    enviar_vendas(args)
 
 
 if __name__ == "__main__":

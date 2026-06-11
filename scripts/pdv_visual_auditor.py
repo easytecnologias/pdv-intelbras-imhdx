@@ -31,6 +31,17 @@ RESULTS_PATH = Path("/var/lib/pdv-visual-auditor/results.jsonl")
 REQUESTS_PATH = Path("/var/lib/pdv-visual-auditor/request_times.json")
 MAX_CALLS_PER_MINUTE = int(os.environ.get("GROQ_MAX_CALLS_PER_MINUTE", "5"))
 MAX_CALLS_PER_HOUR = int(os.environ.get("GROQ_MAX_CALLS_PER_HOUR", "150"))
+GROQ_PRECO_INPUT_USD_POR_MILHAO = float(os.environ.get("GROQ_PRECO_INPUT_USD_POR_MILHAO", "0.11"))
+GROQ_PRECO_OUTPUT_USD_POR_MILHAO = float(os.environ.get("GROQ_PRECO_OUTPUT_USD_POR_MILHAO", "0.34"))
+
+
+def calcular_custo_usd(tokens_entrada, tokens_saida):
+    tokens_entrada = tokens_entrada or 0
+    tokens_saida = tokens_saida or 0
+    return (
+        tokens_entrada / 1_000_000 * GROQ_PRECO_INPUT_USD_POR_MILHAO
+        + tokens_saida / 1_000_000 * GROQ_PRECO_OUTPUT_USD_POR_MILHAO
+    )
 
 SYSTEM_PROMPT = (
     "Voce e um observador visual de caixas de supermercado. Identifique apenas "
@@ -732,7 +743,8 @@ def chamar_groq(imagem_path, produto, valor, quantidade, modo="produto"):
         error.retry_after = response.headers.get("retry-after")
         raise error
 
-    content = response.json()["choices"][0]["message"]["content"]
+    response_json = response.json()
+    content = response_json["choices"][0]["message"]["content"]
     raw = json.loads(content)
     resultado = (
         comparar_presenca_visual(raw)
@@ -740,6 +752,12 @@ def chamar_groq(imagem_path, produto, valor, quantidade, modo="produto"):
         else comparar_identificacao_visual(raw, produto, quantidade)
     )
     resultado["identificacao_visual"] = raw
+    usage = response_json.get("usage") or {}
+    tokens_entrada = usage.get("prompt_tokens")
+    tokens_saida = usage.get("completion_tokens")
+    resultado["tokens_entrada"] = tokens_entrada
+    resultado["tokens_saida"] = tokens_saida
+    resultado["custo_usd"] = calcular_custo_usd(tokens_entrada, tokens_saida)
     return resultado
 
 

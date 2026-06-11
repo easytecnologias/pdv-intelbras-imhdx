@@ -392,3 +392,16 @@ def test_registrar_resultado_video_vazio_vira_none(tmp_path, monkeypatch):
 
     linha = json.loads(results_path.read_text(encoding="utf-8").strip())
     assert linha["video"] is None
+
+
+def test_calcular_custo_usd(monkeypatch):
+    monkeypatch.setattr(auditor, "GROQ_PRECO_INPUT_USD_POR_MILHAO", 0.11)
+    monkeypatch.setattr(auditor, "GROQ_PRECO_OUTPUT_USD_POR_MILHAO", 0.34)
+
+    custo = auditor.calcular_custo_usd(1_000_000, 1_000_000)
+
+    assert custo == pytest.approx(0.45)
+
+
+def test_calcular_custo_usd_aceita_none():
+    assert auditor.calcular_custo_usd(None, None) == 0
