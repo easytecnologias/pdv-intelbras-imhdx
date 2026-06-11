@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 540">
+  <rect width="960" height="540" fill="#d7dde0"/>
+  <rect x="0" y="0" width="960" height="54" fill="#1d2b31"/>
+  <text x="24" y="34" fill="#fff" font-family="Arial" font-size="20">CAM 01 · PDV 01 · 14:32:08</text>
+  <rect x="40" y="86" width="880" height="408" rx="10" fill="#bec8cc"/>
+  <rect x="510" y="128" width="218" height="238" rx="8" fill="#88979d"/>
+  <rect x="540" y="158" width="158" height="160" rx="5" fill="#aeb9bd"/>
+  <rect x="750" y="116" width="132" height="230" rx="7" fill="#28383f"/>
+  <g fill="#596a71"><rect x="765" y="134" width="102" height="8"/><rect x="765" y="150" width="102" height="8"/><rect x="765" y="166" width="102" height="8"/></g>
+  <rect x="110" y="332" width="330" height="120" rx="8" fill="#697a81"/>
+  <g fill="#2f9e44"><rect x="135" y="356" width="54" height="76" rx="4"/><rect x="200" y="356" width="54" height="76" rx="4"/></g>
+  <circle cx="380" cy="208" r="62" fill="#35545f"/>
+  <path d="M420 262 C470 280 500 312 520 354" stroke="#35545f" stroke-width="38" fill="none" stroke-linecap="round"/>
+  <rect x="525" y="178" width="145" height="116" rx="5" fill="none" stroke="#e03131" stroke-width="6"/>
+  <circle cx="598" cy="236" r="31" fill="#ff6b6b" opacity=".34"/>
+  <text x="552" y="242" fill="#a61e1e" font-family="Arial" font-size="18" font-weight="bold">SEM ITEM</text>
+</svg>

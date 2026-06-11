@@ -1,0 +1,16 @@
+services:
+  easy-auditoria-demo:
+    build: .
+    container_name: easy-auditoria-dashboard-demo
+    restart: unless-stopped
+    ports:
+      - "8098:80"
+    volumes:
+      - ./data:/usr/share/nginx/html/data:ro
+    networks:
+      - default
+      - sightops-platform
+
+networks:
+  sightops-platform:
+    external: true
