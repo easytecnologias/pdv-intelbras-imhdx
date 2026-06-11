@@ -89,6 +89,7 @@ def montar_evento(registro, pdv_station):
         "timestamp": registro.get("timestamp"),
         "pdv": pdv_station,
         "imagem": registro.get("imagem"),
+        "cupom": registro.get("cupom"),
         "produto": registro.get("produto"),
         "valor_unitario": registro.get("valor_unitario"),
         "quantidade": registro.get("quantidade"),
@@ -97,20 +98,41 @@ def montar_evento(registro, pdv_station):
     }
 
 
+def enviar_imagem_evento(api_url, api_token, evento_id, imagem_path, timeout):
+    caminho = Path(imagem_path)
+    if not caminho.is_file():
+        return
+    headers = {"Authorization": f"Bearer {api_token}"}
+    try:
+        with caminho.open("rb") as arquivo:
+            requests.post(
+                f"{api_url}/api/v1/events/{evento_id}/image",
+                files={"file": (caminho.name, arquivo, "image/jpeg")},
+                headers=headers,
+                timeout=timeout,
+            )
+    except Exception:
+        pass
+
+
 def enviar_eventos(api_url, api_token, eventos, pdv_station, timeout):
     if not eventos or not api_url or not api_token:
         return
     headers = {"Authorization": f"Bearer {api_token}"}
     for registro in eventos:
         try:
-            requests.post(
+            resposta = requests.post(
                 f"{api_url}/api/v1/events",
                 json=montar_evento(registro, pdv_station),
                 headers=headers,
                 timeout=timeout,
             )
+            evento_id = resposta.json().get("id")
         except Exception:
-            pass
+            continue
+        imagem = registro.get("imagem")
+        if evento_id and imagem:
+            enviar_imagem_evento(api_url, api_token, evento_id, imagem, timeout)
 
 
 def estado_servico(nome_servico):

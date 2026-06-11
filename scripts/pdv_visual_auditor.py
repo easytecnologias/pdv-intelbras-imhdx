@@ -799,6 +799,7 @@ def parse_args():
         description="Auditoria visual do scanner PDV usando Gemini."
     )
     parser.add_argument("--imagem", required=True, help="Caminho do arquivo .jpg")
+    parser.add_argument("--cupom", default="", help="Numero do cupom no PDV")
     parser.add_argument("--produto", required=True, help="Descricao do item no PDV")
     parser.add_argument("--valor", required=True, type=float, help="Valor unitario")
     parser.add_argument(
@@ -822,6 +823,7 @@ def registrar_resultado(args, resultado):
     registro = {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
         "imagem": str(args.imagem),
+        "cupom": str(args.cupom),
         "produto": str(args.produto),
         "valor_unitario": float(args.valor),
         "quantidade": float(args.quantidade),

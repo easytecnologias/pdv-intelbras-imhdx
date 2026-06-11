@@ -25,6 +25,7 @@ def test_montar_evento():
     registro = {
         "timestamp": "2026-06-10T14:32:08",
         "imagem": "/tmp/foo.jpg",
+        "cupom": "221548",
         "produto": "Cafe Marata 250g",
         "valor_unitario": 14.99,
         "quantidade": 1,
@@ -33,6 +34,7 @@ def test_montar_evento():
     }
     evento = sync.montar_evento(registro, "001")
     assert evento["pdv"] == "001"
+    assert evento["cupom"] == "221548"
     assert evento["produto"] == "Cafe Marata 250g"
     assert evento["resultado"] == {"resultado": "NAO_CONFERE", "confianca": 90}
 
@@ -134,6 +136,35 @@ def test_enviar_eventos_erro_de_rede_nao_propaga():
     eventos = [{"timestamp": "1", "resultado": {"resultado": "NAO_CONFERE"}}]
     with patch.object(sync.requests, "post", side_effect=Exception("boom")):
         sync.enviar_eventos("https://api.example", "token123", eventos, "001", 10)
+
+
+def test_enviar_eventos_envia_imagem_quando_disponivel(tmp_path):
+    imagem = tmp_path / "foto.jpg"
+    imagem.write_bytes(b"fake-jpg")
+    eventos = [{"timestamp": "1", "imagem": str(imagem), "resultado": {"resultado": "NAO_CONFERE"}}]
+
+    mock_resposta = type("Resp", (), {"json": lambda self: {"id": 42}})()
+    with patch.object(sync.requests, "post", return_value=mock_resposta) as mock_post:
+        sync.enviar_eventos("https://api.example", "token123", eventos, "001", 10)
+
+    assert mock_post.call_count == 2
+    args, kwargs = mock_post.call_args
+    assert args[0] == "https://api.example/api/v1/events/42/image"
+    assert kwargs["headers"] == {"Authorization": "Bearer token123"}
+    assert "file" in kwargs["files"]
+
+
+def test_enviar_imagem_evento_arquivo_inexistente_nao_chama_api(tmp_path):
+    with patch.object(sync.requests, "post") as mock_post:
+        sync.enviar_imagem_evento("https://api.example", "token123", 42, str(tmp_path / "nao-existe.jpg"), 10)
+    mock_post.assert_not_called()
+
+
+def test_enviar_imagem_evento_erro_de_rede_nao_propaga(tmp_path):
+    imagem = tmp_path / "foto.jpg"
+    imagem.write_bytes(b"fake-jpg")
+    with patch.object(sync.requests, "post", side_effect=Exception("boom")):
+        sync.enviar_imagem_evento("https://api.example", "token123", 42, str(imagem), 10)
 
 
 @pytest.mark.parametrize(
