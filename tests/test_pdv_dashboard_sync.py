@@ -290,6 +290,30 @@ def test_processar_videos_pendentes_desiste_apos_max_tentativas(tmp_path):
     assert sync.ler_videos_pendentes(str(pendentes_file)) == []
 
 
+def test_processar_videos_pendentes_limita_por_execucao(tmp_path):
+    pendentes_file = tmp_path / "pendentes.jsonl"
+    timestamp_antigo = (datetime.now() - timedelta(seconds=200)).isoformat(timespec="seconds")
+    itens = [
+        {"evento_id": i, "timestamp": timestamp_antigo, "tentativas": 0}
+        for i in range(sync.VIDEO_RETRY_MAX_POR_EXECUCAO + 2)
+    ]
+    sync.gravar_videos_pendentes(str(pendentes_file), itens)
+
+    args = argparse_namespace(tmp_path, pendentes_file)
+
+    def fake_baixar(args, event_dt, channel, output_path):
+        Path(output_path).write_bytes(b"fake-mp4")
+
+    mock_resposta = type("Resp", (), {"json": lambda self: {"id": 1}})()
+    with patch.object(sync.bot, "baixar_clipe_imhdx", side_effect=fake_baixar) as mock_baixar, \
+            patch.object(sync.requests, "post", return_value=mock_resposta):
+        sync.processar_videos_pendentes(args)
+
+    assert mock_baixar.call_count == sync.VIDEO_RETRY_MAX_POR_EXECUCAO
+    restantes = sync.ler_videos_pendentes(str(pendentes_file))
+    assert len(restantes) == 2
+
+
 def argparse_namespace(tmp_path, pendentes_file):
     return type("Args", (), {
         "api_url": "https://api.example",

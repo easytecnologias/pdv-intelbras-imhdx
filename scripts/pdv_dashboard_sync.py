@@ -24,6 +24,7 @@ SERVICOS_HEALTH = (
 
 VIDEO_RETRY_MIN_AGE_SECONDS = 90
 VIDEO_RETRY_MAX_TENTATIVAS = 5
+VIDEO_RETRY_MAX_POR_EXECUCAO = 3
 
 FECHACUPOM_RE = re.compile(r":FECHACUPOM \| Cod: \S+ \| Descricao:.*?\| VlTotal: ([\d.]+)\|")
 
@@ -241,6 +242,7 @@ def processar_videos_pendentes(args):
 
     agora = datetime.now()
     restantes = []
+    tentativas_restantes = VIDEO_RETRY_MAX_POR_EXECUCAO
     for item in itens:
         try:
             event_dt = datetime.fromisoformat(item["timestamp"])
@@ -250,6 +252,11 @@ def processar_videos_pendentes(args):
         if (agora - event_dt).total_seconds() < VIDEO_RETRY_MIN_AGE_SECONDS:
             restantes.append(item)
             continue
+
+        if tentativas_restantes <= 0:
+            restantes.append(item)
+            continue
+        tentativas_restantes -= 1
 
         evento_id = item["evento_id"]
         video_path = Path(args.video_retry_dir) / f"{evento_id}.mp4"
@@ -405,9 +412,9 @@ def main():
         args.api_url, args.api_token, eventos, args.pdv_station, args.timeout, args.pending_videos_file
     )
     write_offset(args.offset_file, offset)
-    processar_videos_pendentes(args)
     enviar_health(args.api_url, args.api_token, args.pdv_station, args.timeout)
     enviar_vendas(args)
+    processar_videos_pendentes(args)
 
 
 if __name__ == "__main__":
