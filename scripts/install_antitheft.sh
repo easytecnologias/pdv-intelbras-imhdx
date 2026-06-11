@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install_antitheft.sh — instala agente antifurto com YOLO + LLaVA no PDV
+# install_antitheft.sh — instala PDV Vision Monitor (Groq API) no PDV
 # Uso: sudo bash install_antitheft.sh
 set -euo pipefail
 
@@ -7,8 +7,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 
 echo "======================================"
-echo " PDV Anti-theft Installer"
-echo " YOLO (rapido) + LLaVA (inteligente)"
+echo " PDV Vision Monitor — Instalacao"
+echo " Groq API (Llama 4 Scout com visao)"
 echo "======================================"
 echo ""
 
@@ -19,47 +19,24 @@ read -p "Usuario da camera: "                      CAMERA_USER
 read -s -p "Senha da camera: "                     CAMERA_PASS; echo
 read -p "Token do Bot Telegram: "                  TELEGRAM_TOKEN
 read -p "Chat ID do Telegram: "                    TELEGRAM_CHAT_ID
-read -p "Modelo LLaVA [llava:7b / moondream]: "   OLLAMA_MODEL
-OLLAMA_MODEL=${OLLAMA_MODEL:-llava:7b}
+read -p "Chave Groq API (console.groq.com): "      GROQ_API_KEY
 
 echo ""
-echo "=== [1/6] Instalando Python 3.8 e pip ==="
+echo "=== [1/3] Instalando Python 3.8 e requests ==="
 apt-get update -qq
 apt-get install -y python3.8 python3.8-distutils curl ca-certificates
 curl -sS https://bootstrap.pypa.io/get-pip.py | python3.8
-python3.8 -m pip install "ultralytics>=8.0" "requests>=2.28" "Pillow>=9.0" --quiet
-echo "Python 3.8 + ultralytics OK"
+python3.8 -m pip install "requests>=2.28" --quiet
+echo "Python 3.8 + requests OK"
 
 echo ""
-echo "=== [2/6] Instalando Ollama ==="
-if ! command -v ollama &>/dev/null; then
-    curl -fsSL https://ollama.ai/install.sh | sh
-else
-    echo "Ollama ja instalado: $(ollama --version)"
-fi
-
-# Garante que Ollama sobe como servico
-systemctl enable ollama 2>/dev/null || true
-systemctl start  ollama 2>/dev/null || ollama serve &
-sleep 3
-
-echo ""
-echo "=== [3/6] Baixando modelo ${OLLAMA_MODEL} (~4GB, pode demorar) ==="
-ollama pull "${OLLAMA_MODEL}"
-echo "Modelo ${OLLAMA_MODEL} OK"
-
-echo ""
-echo "=== [4/6] Criando diretorios e copiando scripts ==="
+echo "=== [2/3] Instalando script e servico ==="
 mkdir -p /opt/pdv-antitheft
-mkdir -p /var/log/pdv-antitheft/{dataset,models,alerts}
+mkdir -p /var/log/pdv-antitheft/alerts
 
-cp "$SCRIPT_DIR/pdv_dataset_builder.py"  /opt/pdv-antitheft/
-cp "$SCRIPT_DIR/pdv_yolo_trainer.py"     /opt/pdv-antitheft/
-cp "$SCRIPT_DIR/pdv_antitheft_agent.py"  /opt/pdv-antitheft/
-chmod +x /opt/pdv-antitheft/*.py
+cp "$SCRIPT_DIR/pdv_antitheft_agent.py" /opt/pdv-antitheft/
+chmod +x /opt/pdv-antitheft/pdv_antitheft_agent.py
 
-echo ""
-echo "=== [5/6] Criando /etc/pdv-antitheft-agent.env ==="
 cat > /etc/pdv-antitheft-agent.env <<ENV
 PDV_STATION=${PDV_STATION}
 CAMERA_HOST=${CAMERA_HOST}
@@ -68,30 +45,22 @@ CAMERA_PASS=${CAMERA_PASS}
 TELEGRAM_BOT_TOKEN=${TELEGRAM_TOKEN}
 TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
 PDV_BASE_DIR=/home/rpdv/frente
-ANTITHEFT_MODEL=/var/log/pdv-antitheft/models/best.pt
-ANTITHEFT_FALLBACK_MODEL=/home/rpdv/yolov8s-world.pt
-ANTITHEFT_CONF=0.35
-ANTITHEFT_INTERVAL=2.0
-ANTITHEFT_EVENT_WINDOW=10.0
-ANTITHEFT_COOLDOWN=30.0
-OLLAMA_URL=http://localhost:11434
-OLLAMA_MODEL=${OLLAMA_MODEL}
-OLLAMA_TIMEOUT=60
-YOLO_DEVICE=cpu
-DATASET_OUTDIR=/var/log/pdv-antitheft/dataset
-TRAINER_OUTDIR=/var/log/pdv-antitheft/models
-LEARNING_OUTDIR=/var/log/pdv-learning-agent
-YOLO_WORLD_MODEL=/home/rpdv/yolov8s-world.pt
+GROQ_API_KEY=${GROQ_API_KEY}
+GROQ_MODEL=meta-llama/llama-4-scout-17b-16e-instruct
+ANTITHEFT_INTERVAL=20.0
+ANTITHEFT_VIT_WINDOW=25.0
+ANTITHEFT_OUTDIR=/var/log/pdv-antitheft/alerts
 ENV
 chmod 600 /etc/pdv-antitheft-agent.env
-echo "env OK"
+echo "Env OK"
 
-echo ""
-echo "=== [6/6] Instalando e iniciando servico ==="
 cp "$REPO_ROOT/services/pdv-antitheft-agent.service" /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable pdv-antitheft-agent.service
-systemctl start  pdv-antitheft-agent.service
+
+echo ""
+echo "=== [3/3] Iniciando servico ==="
+systemctl start pdv-antitheft-agent.service
 sleep 3
 systemctl status pdv-antitheft-agent.service --no-pager
 
@@ -100,16 +69,13 @@ echo "============================================"
 echo " INSTALACAO CONCLUIDA"
 echo "============================================"
 echo ""
-echo "O agente esta rodando com YOLO + ${OLLAMA_MODEL}."
+echo "O agente esta rodando com Groq API."
+echo "Analise a cada 20 segundos."
 echo ""
 echo "Comandos uteis:"
-echo "  Ver alertas em tempo real:"
-echo "    journalctl -u pdv-antitheft-agent.service -f"
+echo "  Ver descricoes em tempo real:"
+echo "    journalctl -u pdv-antitheft-agent -f"
 echo ""
-echo "  Construir dataset e treinar modelo proprio (opcional, melhora deteccao):"
-echo "    python3.8 /opt/pdv-antitheft/pdv_dataset_builder.py --days 7"
-echo "    python3.8 /opt/pdv-antitheft/pdv_yolo_trainer.py"
-echo ""
-echo "  Ver alertas salvos:"
-echo "    ls /var/log/pdv-antitheft/alerts/\$(date +%Y%m%d)/"
+echo "  Ver log de atividade do dia:"
+echo "    cat /var/log/pdv-antitheft/alerts/\$(date +%Y%m%d)/activity.jsonl"
 echo ""

@@ -1,6 +1,6 @@
 [Unit]
-Description=PDV Anti-theft Agent (YOLO)
-After=network-online.target pdv-learning-agent.service
+Description=PDV Vision Monitor (Groq API)
+After=network-online.target
 Wants=network-online.target
 
 [Service]
